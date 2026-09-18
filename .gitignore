@@ -1,0 +1,20 @@
+# entornos / caché
+venv/
+__pycache__/
+*.pyc
+.claude/
+
+# datos y artefactos generados (grandes, regenerables o descargables aparte)
+datasets/
+runs/
+scratch_frames/
+*.mp4
+*.webm
+*.pt
+
+# salidas de scripts / cachés puntuales de la sesión
+*_hsv_scan.csv
+nhl_annotations_*.csv
+rink_preds_*.json
+tracking_log.csv
+scratch_idx.pkl

@@ -1,0 +1,11 @@
+path: REPO_ROOT/datasets/hockeyai
+train: images/train
+val: images/val
+names:
+  0: centriod
+  1: faceoff
+  2: goal
+  3: goalie
+  4: player
+  5: puck
+  6: referee
