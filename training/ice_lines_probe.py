@@ -59,20 +59,59 @@ HSV_V_MIN = 180
 
 # ---------------------------------------------------------------- segmentacion
 
-def ice_hsv(img):
-    """Linea base: umbral fijo en HSV."""
+def ice_hsv(img, s_max=HSV_S_MAX, v_min=HSV_V_MIN):
+    """Linea base: umbral fijo en HSV. Parametrizable -- el umbral de hockey
+    (poco saturado, muy claro) no vale para cesped u otras superficies; los
+    valores por defecto son los de hockey, para no romper a quien ya llama
+    ice_hsv(img) sin mas."""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    return ((hsv[:, :, 1] < HSV_S_MAX) & (hsv[:, :, 2] > HSV_V_MIN)).astype(np.uint8)
+    return ((hsv[:, :, 1] < s_max) & (hsv[:, :, 2] > v_min)).astype(np.uint8)
 
 
-def ice_gmm(img, k=5, sample=30000, seed=0):
+# Deporte -> que es "la superficie". hockey: hielo = claro y neutro (poco croma).
+# futbol: cesped = VERDE, definido por el tono, no por claridad. Los valores son
+# los de OpenCV (H 0-179): el verde del cesped cae en ~35-85 (H=60 es el verde
+# puro), con saturacion minima para no coger grises/blancos y V minimo para no
+# coger sombras negras. Lineas, jugadores y publicidad quedan fuera.
+DEPORTES = ("hockey", "futbol")
+CESPED_H = (35, 85)
+CESPED_S_MIN = 40
+CESPED_V_MIN = 30
+
+
+def cesped_hsv(img, h_min=CESPED_H[0], h_max=CESPED_H[1],
+               s_min=CESPED_S_MIN, v_min=CESPED_V_MIN):
+    """Linea base de futbol: umbral fijo en HSV sobre el tono verde."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    return ((hsv[:, :, 0] >= h_min) & (hsv[:, :, 0] <= h_max)
+            & (hsv[:, :, 1] >= s_min) & (hsv[:, :, 2] >= v_min)).astype(np.uint8)
+
+
+def _check_deporte(deporte):
+    if deporte not in DEPORTES:
+        raise ValueError("deporte {!r} no soportado, usa uno de {}".format(deporte, DEPORTES))
+
+
+def superficie_hsv(img, deporte="hockey"):
+    """El umbral HSV por defecto del deporte (recurso cuando un modelo no arranca)."""
+    _check_deporte(deporte)
+    return cesped_hsv(img) if deporte == "futbol" else ice_hsv(img)
+
+
+def ice_gmm(img, k=5, sample=30000, seed=0, deporte="hockey"):
     """Hielo por mezcla de gaussianas en Lab, sin umbrales absolutos.
 
     Se ajusta el GMM sobre una version reducida (basta para estimar los modos de
     color) y se marcan como hielo TODOS los componentes claros y poco cromaticos,
     no solo el mayor: el hielo suele partirse en dos o tres modos por la
     iluminacion desigual del pabellon y por las zonas pisadas.
+
+    deporte="futbol": el GMM es el mismo, pero los componentes elegidos son los
+    VERDES (tono del centro del componente dentro de CESPED_H y saturacion >=
+    CESPED_S_MIN), no los claros y neutros. Todos los verdes a la vez, porque el
+    cesped segado a franjas se parte en varios modos de claridad.
     """
+    _check_deporte(deporte)
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     small = cv2.resize(lab, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
     X = small.reshape(-1, 3).astype(np.float64)
@@ -84,21 +123,34 @@ def ice_gmm(img, k=5, sample=30000, seed=0):
     em.setCovarianceMatrixType(cv2.ml.EM_COV_MAT_DIAGONAL)
     em.setTermCriteria((cv2.TERM_CRITERIA_MAX_ITER + cv2.TERM_CRITERIA_EPS, 40, 0.1))
     if not em.trainEM(X[idx])[0]:
-        return ice_hsv(img), None
+        return superficie_hsv(img, deporte), None
 
     means = em.getMeans()
     weights = em.getWeights().ravel()
     L = means[:, 0]
     chroma = np.hypot(means[:, 1] - 128.0, means[:, 2] - 128.0)
 
-    # el componente mas "hielo" que exista: claro, neutro y con peso
-    score = weights * (L / 255.0) ** 2 * np.exp(-chroma / 8.0)
-    ancla = int(np.argmax(score))
-    # y con el todos los que estan cerca en claridad y siguen siendo neutros:
-    # asi se recupera el hielo en sombra sin volver a fijar un umbral absoluto
-    sel = np.where((L > L[ancla] - 30) & (chroma < max(12.0, chroma[ancla] + 4)))[0]
-    if ancla not in sel:
-        sel = np.append(sel, ancla)
+    if deporte == "futbol":
+        # tono y saturacion del centro de cada componente (Lab -> BGR -> HSV)
+        centros = np.clip(means, 0, 255).astype(np.uint8).reshape(1, -1, 3)
+        hsv_c = cv2.cvtColor(cv2.cvtColor(centros, cv2.COLOR_LAB2BGR),
+                             cv2.COLOR_BGR2HSV)[0].astype(np.float64)
+        verde = (hsv_c[:, 0] >= CESPED_H[0]) & (hsv_c[:, 0] <= CESPED_H[1]) \
+            & (hsv_c[:, 1] >= CESPED_S_MIN)
+        if verde.any():
+            sel = np.where(verde)[0]
+        else:                                     # ninguno verde: el de tono mas cercano
+            dist = np.abs(hsv_c[:, 0] - np.mean(CESPED_H))
+            sel = np.array([int(np.argmin(dist))])
+    else:
+        # el componente mas "hielo" que exista: claro, neutro y con peso
+        score = weights * (L / 255.0) ** 2 * np.exp(-chroma / 8.0)
+        ancla = int(np.argmax(score))
+        # y con el todos los que estan cerca en claridad y siguen siendo neutros:
+        # asi se recupera el hielo en sombra sin volver a fijar un umbral absoluto
+        sel = np.where((L > L[ancla] - 30) & (chroma < max(12.0, chroma[ancla] + 4)))[0]
+        if ancla not in sel:
+            sel = np.append(sel, ancla)
 
     # posterior pixel a pixel sobre la imagen completa, a media resolucion
     half = cv2.resize(lab, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
@@ -109,12 +161,49 @@ def ice_gmm(img, k=5, sample=30000, seed=0):
         lab_idx = np.argmax(labels, axis=1).astype(np.int32)
     mask_half = np.isin(lab_idx, sel).reshape(half.shape[:2]).astype(np.uint8)
     mask = cv2.resize(mask_half, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
-    info = {"L": L.round(0), "chroma": chroma.round(1), "w": weights.round(3), "sel": sel}
+    var = np.asarray(em.getCovs())
+    var = var.diagonal(axis1=1, axis2=2) if var.ndim == 3 else var      # cov diagonal -> varianza por canal
+    info = {"L": L.round(0), "chroma": chroma.round(1), "w": weights.round(3), "sel": sel,
+            "means": means, "var": var}
     return mask, info
 
 
-def ice_robust(img, chi2=9.0, iters=4):
-    """Hielo por gaussiana robusta en Lab, resembrada por percentiles.
+# espacio -> (conversion de OpenCV, letras de canal, indice del canal de claridad,
+# indices de los canales de croma). Todas las letras son de un solo caracter y
+# distintas dentro de cada espacio, para poder pedir canales como "ab" o "l".
+# En hsv el tono (h) es circular y una gaussiana no lo sabe (rojo ~0 y ~179 quedan
+# lejos); con canales=None entra igualmente, asi que en hsv pide canales="sv".
+ROBUST_SPACES = {
+    "lab": (cv2.COLOR_BGR2LAB, "lab", 0, (1, 2)),
+    "luv": (cv2.COLOR_BGR2LUV, "luv", 0, (1, 2)),
+    "yuv": (cv2.COLOR_BGR2YUV, "yuv", 0, (1, 2)),
+    "hsv": (cv2.COLOR_BGR2HSV, "hsv", 2, (1,)),
+}
+
+
+def ice_robust(img, chi2=9.0, iters=4, espacio="lab", canales=None, info=False,
+               deporte="hockey"):
+    """Hielo por gaussiana robusta en `espacio`, resembrada por percentiles.
+
+    `espacio`: uno de ROBUST_SPACES ("lab", "luv", "yuv", "hsv"). `canales`: que
+    canales entran en la GAUSSIANA, como cadena de letras ("ab", "l", "lab") o
+    lista; None = todos. La SEMILLA (claro + neutro por percentiles) usa siempre
+    la claridad y el croma del espacio, elijas los canales que elijas, asi que
+    canales="ab" ajusta la gaussiana solo al color pero sigue sembrando con lo
+    claro. Ojo: chi2 es un umbral sobre la distancia de Mahalanobis, cuyos grados
+    de libertad son el numero de canales; con menos canales el mismo chi2 es mas
+    generoso (9.0 es ~97% con 3 canales, ~99% con 2, ~99.7% con 1).
+    Los valores por defecto reproducen la version original (Lab, 3 canales).
+    info=True devuelve (mascara, modelo) con el modelo que produjo la mascara
+    (dict: espacio, idx, mu, cov -ya regularizada-, chi2) o (mascara, None) si
+    se cayo al umbral HSV; sirve para dibujar la elipse en el mapa de color.
+    deporte="futbol": la semilla deja de ser "claro y neutro" y pasa a ser el
+    VERDE (tono dentro de CESPED_H, saturacion y valor minimos), es decir, la
+    zona verde del mapa de color; el resto del algoritmo no cambia. La semilla
+    solo decide de donde arranca la gaussiana: las iteraciones la ajustan a los
+    pixeles que de verdad son parecidos.
+
+    Descripcion original: gaussiana robusta en Lab.
 
     Es lo que el GMM de arriba deberia hacer y no hace de forma fiable: ice_gmm
     elige COMPONENTES, y cuando el hielo se parte en varios modos (un logo grande
@@ -127,23 +216,51 @@ def ice_robust(img, chi2=9.0, iters=4):
     no valores absolutos: claro respecto a esta imagen y neutro respecto a esta
     imagen. Eso es lo que da la adaptacion entre pabellones sin recalibrar nada.
     """
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
-    X = lab.reshape(-1, 3)
-    L = X[:, 0]
-    chroma = np.hypot(X[:, 1] - 128.0, X[:, 2] - 128.0)
-    m = (L > np.percentile(L, 55)) & (chroma < np.percentile(chroma, 45))
+    _check_deporte(deporte)
+    if espacio not in ROBUST_SPACES:
+        raise ValueError("espacio {!r} no soportado, usa uno de {}".format(
+            espacio, sorted(ROBUST_SPACES)))
+    code, letras, i_luz, i_croma = ROBUST_SPACES[espacio]
+    if canales is None:
+        idx = list(range(3))
+    else:
+        pedidos = [c.lower() for c in canales]
+        malos = [c for c in pedidos if c not in letras]
+        if malos or not pedidos or len(set(pedidos)) != len(pedidos):
+            raise ValueError("canales {!r} invalidos para {!r} (letras: {})".format(
+                canales, espacio, letras))
+        idx = sorted(letras.index(c) for c in pedidos)
+
+    conv = cv2.cvtColor(img, code).astype(np.float32)
+    X = conv.reshape(-1, 3)
+    # "neutro" = el gris medio convertido a este espacio (128 en Lab/YUV, otro
+    # valor en Luv, 0 de saturacion en HSV), no una constante fija
+    gris = cv2.cvtColor(np.full((1, 1, 3), 128, np.uint8), code)[0, 0].astype(np.float32)
+    L = X[:, i_luz]
+    chroma = np.sqrt(sum((X[:, i] - gris[i]) ** 2 for i in i_croma))
+    if deporte == "futbol":
+        m = cesped_hsv(img).ravel().astype(bool)
+    else:
+        m = (L > np.percentile(L, 55)) & (chroma < np.percentile(chroma, 45))
     if m.sum() < 1000:
-        return ice_hsv(img)
+        base = superficie_hsv(img, deporte)
+        return (base, None) if info else base
+    Xs = X[:, idx]
+    k = len(idx)
+    modelo = None
     for _ in range(iters):
-        mu = X[m].mean(0)
-        cov = np.cov(X[m].T) + np.eye(3) * 2.0        # regularizado: el hielo es casi degenerado
-        d = X - mu
+        mu = Xs[m].mean(0)
+        cov = np.atleast_2d(np.cov(Xs[m].T)) + np.eye(k) * 2.0   # regularizado: el hielo es casi degenerado
+        d = Xs - mu
         maha = np.einsum("ij,jk,ik->i", d, np.linalg.inv(cov), d)
         nuevo = maha < chi2
+        if modelo is None or nuevo.sum() >= 0.02 * len(X):
+            modelo = {"espacio": espacio, "idx": idx, "mu": mu, "cov": cov, "chi2": chi2}
         if nuevo.sum() < 0.02 * len(X):
             break
         m = nuevo
-    return m.reshape(lab.shape[:2]).astype(np.uint8)
+    mask = m.reshape(conv.shape[:2]).astype(np.uint8)
+    return (mask, modelo) if info else mask
 
 
 def rink_region(ice, k_frac=0.012, frac_keep=0.20):
@@ -278,6 +395,21 @@ def local_chroma(img, win=61):
     a_loc = cv2.medianBlur(lab[:, :, 1], win).astype(np.float32)
     b_loc = cv2.medianBlur(lab[:, :, 2], win).astype(np.float32)
     return lab[:, :, 1].astype(np.float32) - a_loc, lab[:, :, 2].astype(np.float32) - b_loc
+
+
+def local_l(img, win=61):
+    """Igual que local_chroma pero en L (claridad), no en color.
+
+    Las lineas de hockey son pintura de color sobre hielo casi blanco, asi que
+    a/b bastan. Una linea BLANCA sobre cesped verde (futbol, atletismo) es
+    justo al reves: casi neutra en color, la senal esta en L. No se usa en el
+    pivote de hockey, pero es la pieza que faltaria para probar la misma
+    estrategia en otro deporte.
+    """
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    win = max(11, int(win) | 1)
+    l_loc = cv2.medianBlur(lab[:, :, 0], win).astype(np.float32)
+    return lab[:, :, 0].astype(np.float32) - l_loc
 
 
 def ridge(resp, scales=(1.5, 3.0, 6.0, 10.0)):

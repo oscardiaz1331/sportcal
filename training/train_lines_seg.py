@@ -42,6 +42,7 @@ os.environ["PATH"] = os.pathsep.join(
 )
 
 import argparse
+import copy
 import sys
 import time
 from pathlib import Path
@@ -81,7 +82,8 @@ STD = np.array([0.229, 0.224, 0.225], np.float32)
 # ------------------------------------------------------------------ datos
 
 class LineasDataset(Dataset):
-    def __init__(self, split, imgsz, augmenta, jobs):
+    def __init__(self, split, imgsz, augmenta, jobs, apariencia=None):
+        self.apariencia = apariencia
         self.items = []
         self.synth = []
         synth_names = {m for m, _ in SYNTH_JOBS}
@@ -138,10 +140,50 @@ class LineasDataset(Dataset):
                 hsv[:, :, 1] = np.clip(hsv[:, :, 1] * np.random.uniform(0.7, 1.3), 0, 255)
                 img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
             img = np.clip(img, 0, 255).astype(np.uint8)
+            if self.apariencia is not None:
+                img = self.apariencia(img, msk)
 
         x = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         x = (x - MEAN) / STD
         return torch.from_numpy(x.transpose(2, 0, 1)), torch.from_numpy(msk.astype(np.int64))
+
+
+class TargetDataset(Dataset):
+    """Frames de video SIN etiquetar (extract_uda_frames.py) para la adaptacion de
+    dominio. Solo aumentacion geometrica/color suave: las pseudo-etiquetas las da el
+    profesor sobre la MISMA imagen, asi que cualquier transformacion es consistente."""
+
+    def __init__(self, imgsz):
+        self.files = sorted((ROOT / "datasets" / "uda_target" / "images" / "train").glob("*.jpg"))
+        self.w, self.h = imgsz
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, i):
+        img = cv2.resize(cv2.imread(str(self.files[i])), (self.w, self.h), interpolation=cv2.INTER_AREA)
+        if np.random.rand() < 0.5:
+            img = img[:, ::-1].copy()
+        x = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        return torch.from_numpy(((x - MEAN) / STD).transpose(2, 0, 1))
+
+
+def mascara_mic(x, parche=64, ratio=0.5):
+    """MIC (Hoyer et al. 2023): tapa parches aleatorios de la imagen objetivo para
+    que el alumno tenga que inferir contexto -- las lineas tapadas se deducen del
+    resto de la pista. Poner a 0 en espacio normalizado = color medio de ImageNet."""
+    b, _, h, w = x.shape
+    g = (torch.rand(b, 1, (h + parche - 1) // parche, (w + parche - 1) // parche, device=x.device) < ratio).float()
+    g = Fn.interpolate(g, size=(h, w), mode="nearest")
+    return x * (1.0 - g)
+
+
+@torch.no_grad()
+def ema_update(teacher, student, alpha):
+    for pt, ps in zip(teacher.parameters(), student.parameters()):
+        pt.mul_(alpha).add_(ps.detach(), alpha=1.0 - alpha)
+    for bt, bs in zip(teacher.buffers(), student.buffers()):
+        bt.copy_(bs)
 
 
 # ------------------------------------------------------------------ modelo
@@ -256,6 +298,15 @@ def main():
     ap.add_argument("--init", default=str(ROOT / "runs" / "lineas_seg" / "best.pt"),
                     help="pesos de partida si existen (por defecto el best.pt del run anterior); "
                          "'' para arrancar de ImageNet puro")
+    ap.add_argument("--aug-apariencia", action="store_true",
+                    help="copy-paste de jugadores reales + logo augmentation (appearance_aug.py)")
+    ap.add_argument("--uda", action="store_true",
+                    help="adaptacion de dominio MIC: profesor EMA + pseudo-etiquetas sobre "
+                         "datasets/uda_target (correr antes extract_uda_frames.py)")
+    ap.add_argument("--uda-batch", type=int, default=2)
+    ap.add_argument("--uda-lambda", type=float, default=0.5)
+    ap.add_argument("--uda-thr-linea", type=float, default=0.7, help="confianza minima para pseudo-etiqueta de linea")
+    ap.add_argument("--uda-thr-fondo", type=float, default=0.95, help="confianza minima para pseudo-etiqueta de fondo")
     args = ap.parse_args()
 
     w, h = (int(v) for v in args.imgsz.lower().split("x"))
@@ -266,7 +317,12 @@ def main():
     tiene_synth = (ROOT / "datasets" / SYNTH_JOBS[0][0] / "train").exists()
     usa_synth = args.synth and tiene_synth
     tr_jobs = REAL_JOBS + (SYNTH_JOBS if usa_synth else [])
-    tr = LineasDataset("train", (w, h), augmenta=True, jobs=tr_jobs)
+    apariencia = None
+    if args.aug_apariencia:
+        from appearance_aug import AppearanceAug
+        apariencia = AppearanceAug()
+        print("aumentacion de apariencia: {} recortes de jugadores reales".format(len(apariencia.crops)))
+    tr = LineasDataset("train", (w, h), augmenta=True, jobs=tr_jobs, apariencia=apariencia)
     va = LineasDataset("val", (w, h), augmenta=False, jobs=REAL_JOBS)  # val: SIEMPRE solo real
     n_synth_tr = int(np.sum(tr.synth))
     print("train {} imagenes ({} reales, {} sinteticas)   val {} (solo real)   a {}x{} en {}".format(
@@ -301,6 +357,20 @@ def main():
     escala = torch.amp.GradScaler(device)
     ce = nn.CrossEntropyLoss(weight=pesos, ignore_index=IGNORE)
 
+    teacher = it_tgt = None
+    if args.uda:
+        tgt = TargetDataset((w, h))
+        if not len(tgt):
+            raise SystemExit("sin frames objetivo -- corre antes training/extract_uda_frames.py")
+        dl_tgt = DataLoader(tgt, batch_size=args.uda_batch, shuffle=True, num_workers=2,
+                            pin_memory=True, drop_last=True, persistent_workers=True)
+        it_tgt = iter(dl_tgt)
+        teacher = copy.deepcopy(model).eval()
+        for p_ in teacher.parameters():
+            p_.requires_grad_(False)
+        print("UDA (MIC): {} frames objetivo sin etiquetar, lambda={}, umbrales linea/fondo {}/{}".format(
+            len(tgt), args.uda_lambda, args.uda_thr_linea, args.uda_thr_fondo))
+
     mejor = -1.0
     for ep in range(1, args.epochs + 1):
         model.train()
@@ -311,9 +381,26 @@ def main():
             with torch.amp.autocast(device):
                 logits = model(x)
                 loss = ce(logits, y) + dice_lineas(logits, y)
+                if teacher is not None:
+                    try:
+                        xt = next(it_tgt)
+                    except StopIteration:
+                        it_tgt = iter(dl_tgt)
+                        xt = next(it_tgt)
+                    xt = xt.to(device, non_blocking=True)
+                    with torch.no_grad():
+                        conf, pl = torch.softmax(teacher(xt).float(), 1).max(1)
+                        ok = ((pl > 0) & (conf > args.uda_thr_linea)) | ((pl == 0) & (conf > args.uda_thr_fondo))
+                        q = ok.float().mean()                      # ponderacion DAFormer: fraccion fiable
+                        pl = torch.where(ok, pl, torch.full_like(pl, IGNORE))
+                    lt = ce(model(mascara_mic(xt)).float(), pl)
+                    rampa = min(1.0, ep / 3.0)                     # 3 epochs de subida gradual
+                    loss = loss + args.uda_lambda * rampa * q * lt
             escala.scale(loss).backward()
             escala.step(opt)
             escala.update()
+            if teacher is not None:
+                ema_update(teacher, model, 0.999)
             suma += loss.item()
             n += 1
         sched.step()

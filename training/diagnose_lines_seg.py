@@ -43,7 +43,7 @@ from ice_lines_probe import normals  # noqa: E402
 from relabel_reproject import read_label  # noqa: E402
 from train_lines_seg import MEAN, NCLS, STD, UNetResNet34  # noqa: E402
 
-PESOS = ROOT / "runs" / "lineas_seg" / "best.pt"
+PESOS = Path(os.environ.get("LINEAS_PESOS", ROOT / "runs" / "lineas_seg" / "best.pt"))
 
 
 def load_model(device):

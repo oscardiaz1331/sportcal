@@ -61,9 +61,11 @@ USABLE_PX = 10.0     # umbral de "homografia usable"
 
 def template_for(path):
     """El template depende de la liga; hockeyrink_nhl primero porque contiene a hockeyrink."""
-    parts = set(Path(path).parts)
+    parts = Path(path).parts
     for key, tpl in TEMPLATES.items():
-        if key in parts:
+        # exacto o con sufijo (hockeyrink_nhl_valh, hockeyrink_nhl_valx...): las variantes
+        # de evaluacion llevan el nombre de su liga como prefijo
+        if any(p == key or p.startswith(key + "_") for p in parts):
             return tpl
     raise ValueError("no se de que liga es " + str(path))
 
