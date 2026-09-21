@@ -73,3 +73,32 @@ def test_sample_template_never_bridges_two_lines():
 @pytest.mark.parametrize("bad", ["hockey-nhl", "hockey-iihf"])
 def test_sports_stay_independent(bad):
     assert sports.get("soccer-fifa").keypoints().shape != sports.get(bad).keypoints().shape
+
+
+def test_ellipse_labelling_gestures_and_fit():
+    import numpy as np
+    from sportcal.core import circle as CI
+    from sportcal.core.camera import pose_to_H
+    from sportcal.lab.soccer import labeler as LB
+    w, h = 1920, 1080
+    H = pose_to_H(np.array([[-3.0, -68.0, 13.5, np.radians(-10), np.radians(12), 1.9 * w]]), w, h)[0]
+    H = H / H[2, 2]
+    seed = LB.elipse_desde_plantilla(H, w, h, n=12)
+    assert 5 <= len(seed) <= 12 and all(0 < x < w and 0 < y < h for x, y in seed)   # only the part of the circle inside the frame
+    # gestures: click adds, click on a point removes it, dragging from a point moves it, dragging from empty does nothing
+    pts = LB.procesa_gesto_elipse([], (100, 100, 100, 100), 10, 5)
+    pts = LB.procesa_gesto_elipse(pts, (300, 300, 300, 300), 10, 5)
+    assert pts == [(100, 100), (300, 300)]
+    assert LB.procesa_gesto_elipse(pts, (102, 99, 102, 99), 10, 5) == [(300, 300)]
+    assert LB.procesa_gesto_elipse(pts, (100, 100, 150, 160), 10, 5)[0] == (150, 160)
+    assert LB.procesa_gesto_elipse(pts, (700, 700, 800, 800), 10, 5) == pts
+    # fit: centre spot + centre circle x halfway line + the ellipse outline give the field
+    ang = np.linspace(0, 2 * np.pi, 14, endpoint=False)
+    ell = CI._project(H, np.c_[9.15 * np.cos(ang), 9.15 * np.sin(ang)])[0]
+    world = np.array([[0.0, 0.0], [0.0, 9.15]])
+    Hc, res, giro, aviso, Hn = LB.ajusta_elipse(world, CI._project(H, world)[0], ell, w, h)
+    assert Hc is not None and max(res) < 0.5
+    P = np.array([[-30.0, -20.0], [30.0, 20.0], [0.0, 30.0]])
+    assert np.abs(CI._project(Hn, P)[0] - CI._project(H, P)[0]).max() < 1.0
+    assert LB.ajusta_elipse(world, CI._project(H, world)[0], ell[:3], w, h)[0] is None      # < 5 points on the outline
+    assert LB.ajusta_elipse(world[:1], CI._project(H, world)[0][:1], ell, w, h)[0] is None   # < 2 clicked points

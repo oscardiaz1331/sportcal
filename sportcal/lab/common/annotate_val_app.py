@@ -29,6 +29,7 @@ La convencion de simetria (hockey: zona A a la izquierda; futbol: banda cercana 
 la aplica la app sola: la pista y el campo son simetricos.
 """
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -110,10 +111,30 @@ def grad_resultado(_fr, cid, metodo, canny_lo, canny_hi, tol_h, tol_v, usar_pers
 
 
 @st.cache_data(max_entries=6, show_spinner="siguiendo puntos de la grada (KLT adelante y atras + RANSAC)...")
-def klt_resultado(_fr0, _fr1, cid, gap, model, max_corners, quality, min_distance, win, levels, max_fb, ransac, erode_px):
-    """Background motion between two frames of the same clip; cached per frame id and parameters."""
-    return SCM.track_pair(_fr0, _fr1, erode_px=erode_px, model=model, max_corners=max_corners, quality=quality,
-                          min_distance=min_distance, win=win, levels=levels, max_fb_error=max_fb, ransac_thresh=ransac)
+def klt_resultado(_fr0, _fr1, cid, gap, model, max_corners, quality, min_distance, win, levels, max_fb, ransac, erode_px, region_kind):
+    """Motion between two frames of the same clip; cached per frame id and parameters."""
+    return SCM.track_pair(_fr0, _fr1, erode_px=erode_px, region_kind=region_kind, model=model, max_corners=max_corners,
+                          quality=quality, min_distance=min_distance, win=win, levels=levels, max_fb_error=max_fb,
+                          ransac_thresh=ransac)
+
+
+@st.cache_data(max_entries=3, show_spinner="siguiendo el vídeo paso a paso (KLT adelante-atrás + RANSAC; ~1 s por paso con líneas)...")
+def klt_video(v, i0, H_key, step, n, refine, region_kind, model, max_corners, quality, min_distance, win, levels, max_fb, ransac, erode_px):
+    """Every step of `SCM.track_video` from frame i0, already drawn and JPEG-encoded (a native frame is ~6 MB: never keep them)."""
+    H0 = None if H_key is None else np.array(H_key, float).reshape(3, 3)
+    out = []
+    for r in SCM.track_video(lambda j: SLB.lee_frame(v, j), i0, H0, step=step, n=n, refine_taus=(0.015, 0.006) if refine else None,
+                             region_kind=region_kind, erode_px=erode_px, model=model, max_corners=max_corners, quality=quality,
+                             min_distance=min_distance, win=win, levels=levels, max_fb_error=max_fb, ransac_thresh=ransac):
+        native = SLB.lee_frame(v, r["frame"])
+        if native is None:
+            break
+        img = SCM.render_step(native, r)
+        ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 82])
+        m = SCM.MOT.motion_summary(r["cum"], SCM.W_WORK, int(round(SCM.W_WORK * native.shape[0] / native.shape[1])))
+        out.append({"jpg": jpg.tobytes(), "frame": r["frame"], "n_inliers": r["n_inliers"], "n_selected": r["n_selected"],
+                    "residual": r["median_residual"], "score": r["score"], "lost": r["lost"], **m})
+    return out
 
 
 # Todo lo que cambia con el deporte. El flujo de hockey es exactamente el de siempre.
@@ -159,6 +180,7 @@ if "frames" in ss and "deporte" not in ss:      # sesion abierta antes de que ex
 
 def nuevo_frame():
     ss.pts, ss.sel, ss.msg, ss.cands = {}, None, None, []
+    ss.ell = []            # points clicked on the outline of the centre circle (soccer)
     ss.ver += 1
 
 
@@ -168,7 +190,10 @@ if "frames" not in ss or ss.deporte != deporte:
     ss.pos = 0
     ss.ver = ss.get("ver", 0)
     ss.pts, ss.sel, ss.msg, ss.cands = {}, None, None, []
+    ss.ell = []
     ss.ver += 1
+if "ell" not in ss:
+    ss.ell = []
 if "cands" not in ss:
     ss.cands = []
 
@@ -203,10 +228,14 @@ H = None
 res, espejo, aviso, H_raw = [], False, None, None
 proy = {}
 semilla = None     # H propuesta por el solver (solo futbol), mientras no haya >=4 clics
-if len(ids) >= 4:
+usa_elipse = deporte == "futbol" and len(ss.ell) >= 5
+n_min = 2 if usa_elipse else 4
+if usa_elipse and len(ids) >= 2:      # the outline of the centre circle fixes 5 of the 8 degrees of freedom
+    H, res, espejo, aviso, H_raw = SLB.ajusta_elipse(D.tpl[ids], [pts[k] for k in ids], ss.ell, w, h)
+elif len(ids) >= 4:
     H, res, espejo, aviso, H_raw = D.ajusta(D.tpl[ids], [pts[k] for k in ids], w, h)
-    if H is not None:
-        proy = D.pendientes(H_raw, pts, w, h)
+if H is not None:
+    proy = D.pendientes(H_raw, pts, w, h)
 
 # ---------------------------------------------------------------- sugerencia del solver
 centro_fijo = None
@@ -258,6 +287,26 @@ def dibuja_minimapa(pts, sel):
 
 
 st.subheader("{}   ·   frame {}/{}".format(cid, ss.pos + 1, len(ss.frames)))
+modo_elipse = False
+if deporte == "futbol":
+    modo_elipse = st.radio("Qué clicas en el frame", ["Puntos de la plantilla (elige antes el punto en el minimapa)", "Contorno del círculo central (elipse)"],
+                           horizontal=True, key="herr").startswith("Contorno")
+    if modo_elipse:
+        st.info("Clica **5 o más puntos sobre el borde del círculo central** (mejor 8-12 repartidos por el contorno visible; no hace falta que se vea entero). "
+                "Clic sobre un punto = lo quita · arrastrar un punto = lo corrige. Después vuelve a «Puntos de la plantilla» y marca **2 puntos**: "
+                "el centro de campo (6) y un cruce círculo × línea central (7 u 8); con la elipse basta para ajustar el campo. "
+                "Con un tercer punto que no esté en la línea central el ajuste deja de ser ambiguo.")
+        e1, e2, _ = st.columns([1, 1, 2])
+        H_sem = H if H is not None else semilla
+        if e1.button("Sembrar con el círculo de la plantilla actual", disabled=H_sem is None,
+                     help="Pone hasta 12 puntos sobre el círculo que dibuja la H actual o la sugerida; arrástralos al círculo real."):
+            ss.ell = SLB.elipse_desde_plantilla(H_sem, w, h)
+            ss.ver += 1
+            st.rerun()
+        if e2.button("Borrar la elipse", disabled=not ss.ell):
+            ss.ell = []
+            ss.ver += 1
+            st.rerun()
 st.caption("1) Elige el punto en el minimapa   ->   2) haz clic en ese punto del frame  (con >=4 puntos: arrastra los marcadores naranja)")
 mini, xy_mini = dibuja_minimapa(pts, ss.sel)
 clic_m = streamlit_image_coordinates(mini, key="mini_{}".format(ss.ver), width=W_MINI)
@@ -287,15 +336,20 @@ for k in ids:
     cv2.putText(vis, str(k), (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX, max(0.6, w / 1920 * 0.9), (0, 0, 255), 2, cv2.LINE_AA)
 # marcadores NARANJA = donde la H actual cree que estan los demas puntos: arrastra cada
 # uno a su sitio real (o ignoralo si ya esta bien). Cada arrastre reajusta la H.
-for k, (x, y) in proy.items():
+for k, (x, y) in ({} if modo_elipse else proy).items():
     cv2.circle(vis, (int(x), int(y)), max(7, w // 180), (0, 140, 255), 2)
     cv2.putText(vis, str(k), (int(x) + 8, int(y) - 8), cv2.FONT_HERSHEY_SIMPLEX, max(0.5, w / 1920 * 0.7), (0, 140, 255), 2, cv2.LINE_AA)
+if deporte == "futbol":
+    SLB.dibuja_elipse(vis, ss.ell, (255, 0, 255), max(2, w // 640))
 vis_rgb = cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
 clic_f = streamlit_image_coordinates(vis_rgb, key="frame_{}".format(ss.ver), width=W_FRAME, click_and_drag=True)
 if clic_f:
     sx, sy = w / clic_f["width"], h / clic_f["height"]
     g = (clic_f["x1"] * sx, clic_f["y1"] * sy, clic_f["x2"] * sx, clic_f["y2"] * sy)
-    ss.pts, ss.sel, ss.msg = CL.procesa_gesto(pts, ss.sel, proy, g, radio=18 * sx, tol_click=5 * sx)
+    if modo_elipse:
+        ss.ell = SLB.procesa_gesto_elipse(ss.ell, g, radio=14 * sx, tol_click=5 * sx)
+    else:
+        ss.pts, ss.sel, ss.msg = CL.procesa_gesto(pts, ss.sel, proy, g, radio=18 * sx, tol_click=5 * sx)
     ss.ver += 1
     st.rerun()
 if ss.msg:
@@ -304,8 +358,9 @@ if ss.msg:
 # ---------------------------------------------------------------- estado del ajuste
 c1, c2 = st.columns([2, 1])
 with c1:
-    if len(ids) < 4:
-        st.write("Puntos: {} (hacen falta al menos 4 para ver la plantilla).".format(len(ids)))
+    if len(ids) < n_min:
+        st.write("Puntos: {} (hacen falta al menos {} para ver la plantilla{}).".format(
+            len(ids), n_min, "; con la elipse de {} puntos bastan 2".format(len(ss.ell)) if usa_elipse else ""))
     elif H is None:
         st.error(aviso or "No se pudo ajustar.")
     else:
@@ -335,7 +390,10 @@ with c2:
         st.rerun()
     guardable = H is not None
     if st.button("Guardar y siguiente", type="primary", disabled=not guardable):
-        ok, msg = D.guarda(fr, cid, H, {str(k): [float(pts[k][0]), float(pts[k][1])] for k in ids})
+        clics = {str(k): [float(pts[k][0]), float(pts[k][1])] for k in ids}
+        if deporte == "futbol" and ss.ell:
+            clics["elipse"] = [[float(x), float(y)] for x, y in ss.ell]
+        ok, msg = D.guarda(fr, cid, H, clics)
         if ok:
             ss.pos += 1
             nuevo_frame()
@@ -443,6 +501,10 @@ if deporte == "futbol":
         ventana = k3.slider("Ventana del KLT (px)", 7, 51, 21, 2, key="k_win")
         niveles = k4.slider("Niveles de pirámide", 1, 6, 3, key="k_lv")
         fb = k4.slider("Error adelante-atrás máx. (px)", 0.1, 5.0, 1.0, 0.1, key="k_fb")
+        regiones = {"grada y publicidad (recomendado)": "background", "campo (césped y líneas)": "field", "toda la imagen": "all"}
+        region_k = regiones[k1.radio("Dónde tomar las esquinas", list(regiones), key="k_region",
+                                     help="«campo» prueba el KLT sobre el césped y las líneas pintadas: hay poca textura (unas 100 esquinas, casi todas "
+                                          "en las líneas, que solo fijan la posición en la dirección perpendicular) y suele fallar con Δ ≥ 10.")]
         k5, k6, k7 = st.columns(3)
         ransac = k5.slider("Umbral de RANSAC (px)", 0.5, 10.0, 3.0, 0.5, key="k_ransac")
         borde = k6.slider("Erosión del borde del césped (px)", 0, 30, 6, key="k_ero")
@@ -451,7 +513,7 @@ if deporte == "futbol":
         if fr1 is None:
             st.warning("No hay frame {} en este vídeo (Δ demasiado grande).".format(i + gap))
         else:
-            rk = klt_resultado(fr, fr1, cid, gap, modelo_k, max_c, calidad, dmin, ventana, niveles, fb, ransac, borde)
+            rk = klt_resultado(fr, fr1, cid, gap, modelo_k, max_c, calidad, dmin, ventana, niveles, fb, ransac, borde, region_k)
             H_klt = H if H is not None else semilla
             if H_klt is None:
                 st.caption("Para ver la plantilla arrastrada al frame t+Δ, ajusta una H con 4+ clics o elige una sugerencia arriba.")
@@ -465,3 +527,41 @@ if deporte == "futbol":
             if rk["M"] is not None:
                 st.markdown("**Homografía imagen a imagen (píxeles de trabajo, frame t → t+Δ)**")
                 st.dataframe(np.round(rk["M"], 5), hide_index=True, width="stretch")
+
+        # ---- play the tracking over the clip: step by step from this frame, carrying the template
+        st.markdown("**Reproducir el seguimiento sobre el vídeo**")
+        st.caption("Parte de este frame con la plantilla actual (tus clics o la sugerencia elegida) y la arrastra frame a frame con el movimiento del "
+                   "fondo; con la casilla marcada, en cada paso la vuelve a pegar a las líneas pintadas de ese frame (cuesta ~1 s por paso). "
+                   "Los puntos verdes son las esquinas de fondo que sostienen el paso. Se para solo si pierde el fondo (corte de plano o primer plano).")
+        v1, v2, v3, v4 = st.columns(4)
+        v_paso = v1.slider("Frames entre pasos", 1, 10, 5, key="kv_step", help="Con pasos de 25 frames el KLT pierde el seguimiento en los paneos rápidos.")
+        v_n = v2.slider("Número de pasos", 5, 100, 30, key="kv_n")
+        v_ref = v3.checkbox("Corregir con las líneas del campo en cada paso", value=True, key="kv_ref")
+        v_fps = v4.slider("Velocidad (imágenes por segundo)", 1, 15, 5, key="kv_fps")
+        H_play = H if H is not None else semilla
+        if H_play is None:
+            st.caption("Sin plantilla (ni clics ni sugerencia) solo se ven los puntos seguidos, sin campo dibujado.")
+        if st.button("Calcular el seguimiento", key="kv_go"):
+            ss.kv = klt_video(v, i, None if H_play is None else tuple(float(x) for x in np.asarray(H_play).ravel()), v_paso, v_n, v_ref,
+                              region_k, modelo_k, max_c, calidad, dmin, ventana, niveles, fb, ransac, borde)
+            ss.kv_id = cid
+        pasos = ss.get("kv") if ss.get("kv_id") == cid else None
+        if pasos:
+            pos = st.slider("Paso mostrado", 0, len(pasos) - 1, 0, key="kv_pos")
+            hueco = st.empty()
+            info = st.empty()
+
+            def muestra(j):
+                q = pasos[j]
+                hueco.image(q["jpg"], width="stretch")
+                txt = "frame {} · inliers {}/{} · desplazamiento acumulado dx {:.0f}, dy {:.0f} px (960 de ancho), zoom ×{:.3f}".format(
+                    q["frame"], q["n_inliers"], q["n_selected"], q["dx"], q["dy"], q["zoom"])
+                if q["score"] is not None:
+                    txt += " · puntuación de líneas {:.2f}".format(q["score"])
+                info.caption(txt + ("  ·  FONDO PERDIDO: aquí se detiene" if q["lost"] else ""))
+
+            muestra(pos)
+            if st.button("▶ Reproducir desde el paso mostrado", key="kv_play"):
+                for j in range(pos, len(pasos)):
+                    muestra(j)
+                    time.sleep(1.0 / v_fps)

@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 
 from sportcal.core import camera as CAM
+from sportcal.core import circle as CIRC
 from sportcal.core import fitting as FIT
 from sportcal.lab.soccer import field_solver as SF
 from sportcal.sports.soccer import field as FIELD
@@ -155,6 +156,77 @@ def ajusta(world, img_pts, w, h=None):
         aviso = ("con 4 puntos el ajuste es exacto (residuo 0); error esperado ~{:.0f}px: "
                  "revisa el dibujo o añade un 5o punto".format(esperado))
     return Hc, [float(r) for r in res], giro, aviso, Hn
+
+
+def ajusta_elipse(world, img_pts, elipse_pts, w, h=None):
+    """Como `ajusta`, pero ademas el contorno clicado del CIRCULO CENTRAL (>= 5 puntos sobre la elipse).
+
+    La elipse fija 5 de los 8 grados de libertad de H, asi que bastan 2 puntos clicados (p. ej. el centro de campo y un
+    cruce circulo x linea central); con mas puntos la elipse solo refina. Devuelve lo mismo que `ajusta`; el aviso dice el
+    error de la elipse y si el ajuste es ambiguo. Sin minimos cuadrados de puntos solos: la elipse pesa como un punto mas."""
+    world = np.asarray(world, np.float64)
+    img_pts = np.asarray(img_pts, np.float64)
+    if len(elipse_pts) < 5:
+        return None, [], False, "hacen falta al menos 5 puntos sobre el circulo central (hay {})".format(len(elipse_pts)), None
+    if len(world) < 2:
+        return None, [], False, "con la elipse hacen falta al menos 2 puntos de la plantilla (p. ej. el centro de campo y un cruce circulo x linea central)", None
+    out = CIRC.fit_points_ellipse(world, img_pts, elipse_pts, FIELD.CIRCLE_RADIUS)
+    if out is None:
+        return None, [], False, "no se pudo ajustar: la elipse no es una elipse valida o los puntos no encajan con ella", None
+    Hn = out["H"]
+    if h is not None and len(_en_cuadro(Hn, w, h)) < 10:
+        return None, [], False, "con esa elipse y esos puntos casi todo el campo cae fuera del frame: revisa los puntos", None
+    res = np.linalg.norm(_proj(Hn, world) - img_pts, axis=1) * 1920.0 / w
+    Hc, giro = canonicaliza(Hn)
+    aviso = "elipse: error medio {:.1f}px a 1920".format(out["rms_ellipse"] * 1920.0 / w)
+    if out["n_solutions"] > 1:
+        aviso = ("AMBIGUO: {} homografias distintas encajan igual con estos clics; anade un punto que no este sobre la "
+                 "linea central (una esquina o el punto de penalti). ".format(out["n_solutions"])) + aviso
+    return Hc, [float(r) for r in res], giro, aviso, Hn
+
+
+def procesa_gesto_elipse(pts, g, radio, tol_click):
+    """Gesto sobre el frame (px originales, g = (x1, y1, x2, y2)) -> nueva lista de puntos del contorno de la elipse.
+
+    Clic sobre un punto existente (a <= radio): lo quita. Clic en vacio: anade un punto. Arrastre que EMPIEZA sobre un
+    punto: lo mueve a donde se suelta. Arrastre desde un sitio vacio: no hace nada."""
+    x1, y1, x2, y2 = g
+    pts = [tuple(p) for p in pts]
+    d = [float(np.hypot(p[0] - x1, p[1] - y1)) for p in pts]
+    near = int(np.argmin(d)) if d and min(d) <= radio else None
+    arrastre = float(np.hypot(x2 - x1, y2 - y1)) > tol_click
+    if arrastre:
+        if near is not None:
+            pts[near] = (x2, y2)
+        return pts
+    if near is not None:
+        pts.pop(near)
+    else:
+        pts.append((x2, y2))
+    return pts
+
+
+def elipse_desde_plantilla(H, w, h, n=12):
+    """n puntos sobre el circulo central proyectado por H (mundo -> pixel) que caen en cuadro: la semilla que el usuario
+    arrastra a la elipse real. Lista vacia si H no ve el circulo."""
+    a = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    P = np.c_[FIELD.CIRCLE_RADIUS * np.cos(a), FIELD.CIRCLE_RADIUS * np.sin(a)]
+    xy, den = CAM.project(np.asarray(H, float)[None], P)
+    xy, den = xy[0], den[0]
+    ok = (den > 1e-3) & np.isfinite(xy).all(1) & (xy[:, 0] > 0) & (xy[:, 0] < w) & (xy[:, 1] > 0) & (xy[:, 1] < h)
+    return [(float(x), float(y)) for (x, y), o in zip(xy, ok) if o]
+
+
+def dibuja_elipse(vis, pts, color=(255, 0, 255), grosor=2):
+    """Pinta los puntos del contorno y, con >= 5, la elipse ajustada (cv2.fitEllipse) sobre `vis` (BGR)."""
+    r = max(5, vis.shape[1] // 260)
+    for k, (x, y) in enumerate(pts):
+        cv2.circle(vis, (int(x), int(y)), r, color, grosor)
+    if len(pts) >= 5:
+        try:
+            cv2.ellipse(vis, cv2.fitEllipse(np.asarray(pts, np.float32).reshape(-1, 1, 2)), color, grosor, cv2.LINE_AA)
+        except cv2.error:
+            pass
 
 
 def proyecta_pendientes(H_sin_giro, pts, w, h, margen=4):

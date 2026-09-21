@@ -302,3 +302,27 @@ Sources: theifab.com/laws/latest/the-field-of-play, killingley.co.uk (mowing pat
 z ~9-10 m against 13.6 m in `soccer`), so no centre was saved for it. Solver scores on sampled frames were 0.32-0.61: this broadcast is closer and
 frames rarely show the two whole area boxes. Whether the fixed-centre idea holds here is not established.
 
+## 11. KLT on the painted lines, line refinement per step, and labelling with an ellipse (2026-09-21)
+
+**KLT on the field lines: no.** `camera_motion --region field` takes features from the play surface with its lines closed in. On `soccer` f900
+it finds ~100 corners (against 800 in the stands; grass has almost no texture and a painted line only fixes the position across it, the
+aperture problem), 43 survive RANSAC at gap 5 and the fit already agrees with "the camera did not move" (line alignment 0.89 = identity,
+dx -2.4 px where the stands say +4.8), and at gaps 10 and 25 fewer than the 30 inliers needed remain, so there is no motion at all. `--region all` is
+indistinguishable from the stands alone (the corners are stand corners). The stands and boards stay the motion source.
+
+**What does help: pulling the chained H back onto the lines at every step** (`FieldSolver.refine(H, taus=(0.015, 0.006))`, ~0.6 s a step). Chain
+from f900, 5-frame steps, 20 steps, distance to an independent re-solve of that frame / line score: unrefined 5.6 px and 0.61, refined
+3.5 px and 0.70 (the re-solve scores 0.70). The score gain is partly circular (refinement maximises that score), the distance to the re-solve
+is the independent part. It is on by default in the viewer. One clip, one start frame.
+
+**Viewer:** the KLT zone plays the tracking over the clip (`track_video`, `render_step`): from the current frame and template, step by step,
+green = background points supporting the step, yellow = carried template; stops on its own when the background is lost.
+
+**Labelling with the centre-circle ellipse** (`core/circle.py`, `lab/soccer/labeler.py::ajusta_elipse`). The outline of the circle is a conic:
+5 of the 8 numbers of H. The remaining 3 are a rotation about the circle centre and two "boosts" (the stabiliser of the conic), so **the ellipse
+plus 2 point clicks** (field centre and a circle x halfway-line crossing) fix the field; more clicks over-determine it and the ellipse then refines. The
+mirror-image family is excluded by orientation (a real camera never sees the mirror), which leaves only the 180-degree twin the labeller already
+canonicalises. If all the clicked points lie on the halfway line the fit can be ambiguous; the app says so and asks for a point off that line.
+Checked only on synthetic scenes (`tests/test_circle.py`: exact with 2 clicks and a clean outline, within a few px with 1 px of click noise, and
+better than a 4-point DLT when the four clicks are poorly spread); **not measured yet on hand-labelled real frames**.
+

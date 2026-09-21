@@ -262,10 +262,12 @@ class FieldSolver:
             results.append({"H": canonicalize_H(Hr), "score": s, "score0": float(scores[i]), "H0": Hs[i]})
         return sorted(results, key=lambda r: -r["score"])
 
-    def refine(self, H0):
+    def refine(self, H0, taus=None):
         """Perturb 4 fixed image points (8 parameters, px) to maximise the fine score. Cascade of
         decreasing tau: a wide tau makes the score smooth and recovers 100+ px of error, the last
-        passes sharpen it; only the last one uses the (more expensive) fine sampling."""
+        passes sharpen it; only the last one uses the (more expensive) fine sampling. `taus` (fractions of the
+        width, the last one is always self.tau) replaces the default cascade, e.g. a short one to track a start
+        that is only a few pixels off."""
         src = (np.array([[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]]) * [self.w, self.h]).astype(np.float32)
 
         def H_of(d):
@@ -273,7 +275,8 @@ class FieldSolver:
             return P @ H0
 
         best = H0
-        for tau in (0.04 * self.w, 0.015 * self.w, 0.006 * self.w, self.tau):
+        cascade = (0.04 * self.w, 0.015 * self.w, 0.006 * self.w) if taus is None else tuple(t * self.w for t in taus)
+        for tau in cascade + (self.tau,):
             fine = tau == self.tau
             # pinhole penalty: a free 8-parameter H can "win" over the truth by deforming into
             # something no camera produces

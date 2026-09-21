@@ -66,3 +66,39 @@ def test_annotate_app_soccer_motion_zone_and_every_line_method_render():
         next(r for r in at.radio if r.key == "g_metodo").set_value(method)
         at.run()
         assert not at.exception, (method, [str(e.value)[:200] for e in at.exception])
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not any(ROOT.glob("soccer*.mp4")), reason="no soccer clip on disk")
+def test_annotate_app_soccer_ellipse_tool_fixed_two_clicks_and_klt_player():
+    import numpy as np
+    from sportcal.core import circle as CI
+    from sportcal.core.camera import pose_to_H
+    at = AppTest.from_file(str(COMMON / "annotate_val_app.py"), default_timeout=300)
+    at.run()
+    at.sidebar.radio[0].set_value("futbol").run()
+    assert not at.exception
+    # ellipse tool on, with an outline and two point clicks made from a synthetic pose (1920x1080 frames)
+    H = pose_to_H(np.array([[-3.0, -68.0, 13.5, np.radians(-10), np.radians(12), 1.9 * 1920]]), 1920, 1080)[0]
+    H = H / H[2, 2]
+    ang = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+    at.session_state["ell"] = [tuple(p) for p in CI._project(H, np.c_[9.15 * np.cos(ang), 9.15 * np.sin(ang)])[0]]
+    at.session_state["pts"] = {6: tuple(CI._project(H, np.array([[0.0, 0.0]]))[0][0]), 7: tuple(CI._project(H, np.array([[0.0, -9.15]]))[0][0])}
+    next(r for r in at.radio if r.key == "herr").set_value("Contorno del círculo central (elipse)")
+    at.run()
+    assert not at.exception, [str(e.value)[:200] for e in at.exception]
+    assert any("puntos" in str(s.value) and "residuo" in str(s.value) for s in list(at.success) + list(at.warning)), "the two clicks + ellipse should give a fit"
+    # the KLT zone: every region and the step-by-step player without a template
+    next(c for c in at.checkbox if c.key == "ver_klt").check()
+    at.run()
+    for region in next(r for r in at.radio if r.key == "k_region").options:
+        next(r for r in at.radio if r.key == "k_region").set_value(region)
+        at.run()
+        assert not at.exception, (region, [str(e.value)[:200] for e in at.exception])
+    next(r for r in at.radio if r.key == "k_region").set_value(next(r for r in at.radio if r.key == "k_region").options[0])
+    next(s for s in at.slider if s.key == "kv_n").set_value(5)
+    next(c for c in at.checkbox if c.key == "kv_ref").uncheck()
+    next(b for b in at.button if b.key == "kv_go").click()
+    at.run()
+    assert not at.exception, [str(e.value)[:200] for e in at.exception]
+    assert next(s for s in at.slider if s.key == "kv_pos").max == 5

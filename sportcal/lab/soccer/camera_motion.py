@@ -40,13 +40,38 @@ def background_mask(work_bgr, erode_px=6, chi2=10.17):
     return cv2.erode((~region).astype(np.uint8), np.ones((k, k), np.uint8)), region
 
 
-def track_pair(frame0, frame1, erode_px=6, **kw):
-    """Motion frame0 -> frame1 (both native BGR) from the non-grass region, in working pixels.
+REGIONS = ("background", "field", "all")
 
-    Returns the dict of `core.motion.estimate_motion` plus "work0", "work1" (resized frames), "region" (grass of frame 0)
-    and "mask" (where features were allowed). Extra keyword arguments go to `estimate_motion`."""
+
+def field_mask(work_bgr, erode_px=6, chi2=10.17, close_px=9):
+    """(mask uint8, region bool): the play surface INCLUDING the painted lines, eroded away from its border.
+
+    The robust Gaussian leaves the lines (and the players) as holes in the grass region; closing fills the thin ones, so a
+    feature can sit on a line or on a line crossing."""
+    region = grass_region(work_bgr, chi2)
+    k = 2 * int(close_px) + 1
+    filled = cv2.morphologyEx(region.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    e = 2 * int(erode_px) + 1
+    return cv2.erode(filled, np.ones((e, e), np.uint8)), region
+
+
+def track_pair(frame0, frame1, erode_px=6, region_kind="background", **kw):
+    """Motion frame0 -> frame1 (both native BGR) from the chosen part of the picture, in working pixels.
+
+    region_kind: "background" = everything that is not play surface (stands, boards), "field" = the play surface with its
+    painted lines, "all" = no restriction. Returns the dict of `core.motion.estimate_motion` plus "work0", "work1"
+    (resized frames), "region" (grass of frame 0) and "mask" (where features were allowed). Extra keyword arguments go
+    to `estimate_motion`."""
+    if region_kind not in REGIONS:
+        raise ValueError("region_kind must be one of {}".format(REGIONS))
     w0, w1 = to_work(frame0), to_work(frame1)
-    mask, region = background_mask(w0, erode_px)
+    if region_kind == "background":
+        mask, region = background_mask(w0, erode_px)
+    elif region_kind == "field":
+        mask, region = field_mask(w0, erode_px)
+    else:
+        region = grass_region(w0)
+        mask = np.ones(region.shape, np.uint8)
     res = MOT.estimate_motion(cv2.cvtColor(w0, cv2.COLOR_BGR2GRAY), cv2.cvtColor(w1, cv2.COLOR_BGR2GRAY), mask=mask, **kw)
     res.update({"work0": w0, "work1": w1, "region": region, "mask": mask})
     return res
@@ -98,7 +123,7 @@ def gap_experiment(video, frame, gaps, **kw):
     return rows
 
 
-def chain_experiment(video, frame, step, n, min_solver_score=0.6, check_every=1, **kw):
+def chain_experiment(video, frame, step, n, min_solver_score=0.6, check_every=1, refine=None, **kw):
     """Carry the field homography solved at `frame` through `n` steps of `step` frames using only the background motion.
 
     At every checkpoint the propagated H is compared with the solver's own solution for that frame (no reference is used
@@ -122,9 +147,13 @@ def chain_experiment(video, frame, step, n, min_solver_score=0.6, check_every=1,
             break
         H = MOT.propagate_homography(H, r["M"])
         prev = cur
-        if k % check_every:
+        if refine is None and k % check_every:
             continue
         solver = FS.FieldSolver(EV.etapas_mascara(cur)["lineas"])
+        if refine is not None:                       # pull the propagated H back onto the painted lines at every step
+            H, _ = solver.refine(H, taus=refine)
+        if k % check_every:
+            continue
         solved = solver.search_lines()
         row = {"frame": frame + k * step, "inliers": r["n_inliers"], "propagated_score": float(solver.score(H[None], fine=True)[0])}
         if solved:
@@ -132,6 +161,70 @@ def chain_experiment(video, frame, step, n, min_solver_score=0.6, check_every=1,
             row["h_distance"] = FS.reprojection_error(H, solved[0]["H"], *w_h) * 1920.0 / w_h[0]
         rows.append(row)
     return rows, start[0]["H"]
+
+
+def track_video(get_frame, frame0, H0, step=5, n=40, refine_taus=None, region_kind="background", erode_px=6, **kw):
+    """Carry a homography (or just the camera motion, when H0 is None) through the clip, one short step at a time.
+
+    get_frame(i) -> native BGR frame or None. H0 maps world to NATIVE pixels of frame0. At every step the background
+    motion is estimated (`track_pair`), chained onto H, and, if `refine_taus` is given (fractions of the width, see
+    `FieldSolver.refine`), H is pulled back onto the painted lines of that frame. Yields one dict per frame, the first
+    being frame0 itself: {"frame", "H" (native, or None), "M" (step motion in working pixels, None at frame0), "cum"
+    (frame0 -> this frame, working pixels), "n_selected", "n_inliers", "median_residual", "points" (working-pixel inlier
+    positions in the previous frame), "score" (line score of H, if refined), "lost"}. Stops after a step that loses the
+    background (a shot cut or a close-up), which is reported with "lost": True."""
+    prev = get_frame(frame0)
+    if prev is None:
+        return
+    w_native = prev.shape[1]
+    S = np.diag([W_WORK / float(w_native), W_WORK / float(w_native), 1.0])
+    H = None if H0 is None else np.asarray(H0, float)
+    cum = np.eye(3)
+    yield {"frame": frame0, "H": H, "M": None, "cum": cum, "n_selected": 0, "n_inliers": 0, "median_residual": float("nan"),
+           "points": np.zeros((0, 2)), "score": None, "lost": False}
+    for k in range(1, n + 1):
+        i = frame0 + k * step
+        cur = get_frame(i)
+        if cur is None:
+            return
+        r = track_pair(prev, cur, erode_px=erode_px, region_kind=region_kind, **kw)
+        row = {"frame": i, "H": H, "M": r["M"], "n_selected": r["n_selected"], "n_inliers": r["n_inliers"],
+               "median_residual": r["median_residual"], "points": r["p0"][r["inliers"]], "score": None, "lost": r["M"] is None}
+        if r["M"] is None:
+            row["cum"] = cum
+            yield row
+            return
+        cum = r["M"] @ cum
+        row["cum"] = cum
+        if H is not None:
+            H = MOT.propagate_homography(H, to_native_motion(r["M"], w_native))
+            if refine_taus is not None:
+                solver = FS.FieldSolver(EV.etapas_mascara(cur)["lineas"])
+                Hw, row["score"] = solver.refine(S @ H, taus=tuple(refine_taus))
+                H = np.linalg.inv(S) @ Hw
+            row["H"] = H
+        prev = cur
+        yield row
+
+
+def render_step(native, step, width=960):
+    """RGB image (width px wide) of one `track_video` row: the frame with the carried template (yellow) and the background
+    points that supported this step (green, drawn in the previous frame's positions). Cheap enough to call per step."""
+    from sportcal.lab.soccer import labeler as LB
+    h0, w0 = native.shape[:2]
+    vis = native.copy()
+    if step.get("H") is not None:
+        LB.dibuja_plantilla(vis, step["H"], (0, 255, 255), max(2, w0 // 640))
+    vis = cv2.resize(vis, (width, int(round(h0 * width / w0))), interpolation=cv2.INTER_AREA)
+    sc = width / float(W_WORK)
+    for x, y in step["points"][::3]:
+        cv2.circle(vis, (int(x * sc), int(y * sc)), 2, (0, 255, 0), -1)
+    txt = "frame {}   inliers {}/{}".format(step["frame"], step["n_inliers"], step["n_selected"])
+    if step["lost"]:
+        txt = "frame {}   BACKGROUND LOST (shot cut or close-up)".format(step["frame"])
+    cv2.putText(vis, txt, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.putText(vis, txt, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 1, cv2.LINE_AA)
+    return cv2.cvtColor(vis, cv2.COLOR_BGR2RGB)
 
 
 def to_native_motion(M, w_native, w_work=W_WORK):
@@ -213,8 +306,12 @@ def main():
     ap.add_argument("--model", default="homography", choices=MOT.MODELS)
     ap.add_argument("--max-fb", type=float, default=1.0)
     ap.add_argument("--ransac", type=float, default=3.0)
+    ap.add_argument("--refine", default="", help="comma-separated tau fractions: refine the chained H on the line mask at every step")
+    ap.add_argument("--region", default="background", choices=REGIONS, help="where the KLT features are taken from")
     a = ap.parse_args()
     kw = dict(model=a.model, max_fb_error=a.max_fb, ransac_thresh=a.ransac)
+    if a.region != "background":
+        kw["region_kind"] = a.region
     if a.gaps:
         rows = gap_experiment(a.video, a.frame, [int(x) for x in a.gaps.split(",")], **kw)
         print("gap  selected tracked inliers resid  line-dist(med px, KLT / no motion)  within 3 px (KLT / no motion)   zoom   dx    s")
@@ -224,7 +321,8 @@ def main():
                 r["gap"], r["selected"], r["tracked"], r["inliers"], _fmt(r["residual"]), _fmt(r.get("median")), _fmt(r.get("median_identity")),
                 _fmt(r.get("within3")), _fmt(r.get("within3_identity")), _fmt(s.get("zoom"), 3), _fmt(s.get("dx"), 1), _fmt(r["seconds"], 2)))
     if a.chain_step:
-        rows, _ = chain_experiment(a.video, a.frame, a.chain_step, a.chain_n, check_every=a.check_every, **kw)
+        refine = tuple(float(x) for x in a.refine.split(",")) if a.refine else None
+        rows, _ = chain_experiment(a.video, a.frame, a.chain_step, a.chain_n, check_every=a.check_every, refine=refine, **kw)
         if rows is None:
             print("the start frame does not solve well enough to carry its homography")
         else:
