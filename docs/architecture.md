@@ -16,7 +16,7 @@ never in code comments or docstrings.
 ```
 sportcal/
   core/      sport-agnostic building blocks: geometry (DLT, refinement), pinhole camera,
-             robust fitting, surface segmentation, label I/O
+             robust fitting, surface segmentation, frame-to-frame background motion, label I/O
   sports/    one subpackage per sport: template geometry + line classes (pure data)
   lab/       per-sport experiments, runnable with `python -m sportcal.lab.<sport>.<name>`
     <sport>/archive/   frozen dead ends and superseded tools (unmaintained)

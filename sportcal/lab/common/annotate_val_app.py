@@ -40,6 +40,7 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 from sportcal.paths import ROOT
 
 from sportcal.lab.hockey import click_labeler as CL
+from sportcal.lab.soccer import camera_motion as SCM
 from sportcal.lab.soccer import evaluation as SEV
 from sportcal.lab.soccer import field_solver as SFD
 from sportcal.lab.soccer import gradient as SGR
@@ -53,7 +54,7 @@ from sportcal.sports.hockey import rink
 # soccer_eval se importa aqui aunque la app no lo llame, porque soccer_labeler lo carga perezoso
 # y sin recargarlo se quedaria con la version vieja.
 import importlib  # noqa: E402
-for _m in (CL, SFD, SEV, SGR, SLB):
+for _m in (CL, SFD, SEV, SGR, SLB, SCM):
     importlib.reload(_m)
 
 PARAMS = rink.RINK_NHL
@@ -100,12 +101,19 @@ def grad_base(_fr, cid):
 
 @st.cache_data(max_entries=6, show_spinner="extrayendo rectas y elipse (unos segundos)...")
 def grad_resultado(_fr, cid, metodo, canny_lo, canny_hi, tol_h, tol_v, usar_personas, cesped_min, pico_min, usar_region,
-                   det_elipse, ed_params, ed_techo, fe_params, fe_techo):
+                   det_elipse, ed_params, ed_techo, fe_params, fe_techo, fld_params, fld_techo):
     resp, cajas = grad_base(_fr, cid)
     return SGR.procesa(_fr, None, metodo=metodo, canny=(canny_lo, canny_hi), tol_h=tol_h, tol_v=tol_v,
                        usar_personas=usar_personas, resp=resp, cajas=cajas, cesped_min=cesped_min, pico_min=pico_min,
                        usar_region=usar_region, det_elipse=det_elipse, ed_params=ed_params, ed_techo=ed_techo,
-                       fe_params=fe_params, fe_techo=fe_techo)
+                       fe_params=fe_params, fe_techo=fe_techo, fld_params=fld_params, fld_techo=fld_techo)
+
+
+@st.cache_data(max_entries=6, show_spinner="siguiendo puntos de la grada (KLT adelante y atras + RANSAC)...")
+def klt_resultado(_fr0, _fr1, cid, gap, model, max_corners, quality, min_distance, win, levels, max_fb, ransac, erode_px):
+    """Background motion between two frames of the same clip; cached per frame id and parameters."""
+    return SCM.track_pair(_fr0, _fr1, erode_px=erode_px, model=model, max_corners=max_corners, quality=quality,
+                          min_distance=min_distance, win=win, levels=levels, max_fb_error=max_fb, ransac_thresh=ransac)
 
 
 # Todo lo que cambia con el deporte. El flujo de hockey es exactamente el de siempre.
@@ -201,12 +209,22 @@ if len(ids) >= 4:
         proy = D.pendientes(H_raw, pts, w, h)
 
 # ---------------------------------------------------------------- sugerencia del solver
+centro_fijo = None
+if deporte == "futbol":       # fixed camera centre calibrated for this clip (python -m sportcal.lab.soccer.camera_center --save)
+    cal = SLB.load_center(v)
+    if cal is not None:
+        if st.checkbox("Usar el centro de cámara fijo de este vídeo ({:.1f}, {:.1f}, {:.1f}) m, calibrado con {} frames".format(
+                *cal["center"], cal.get("votes", "?")), value=True, key="usar_centro"):
+            centro_fijo = cal["center"]
+    else:
+        st.caption("Sin centro de cámara calibrado para '{}': `python -m sportcal.lab.soccer.camera_center --video {} --save` "
+                   "añade la sugerencia «centro fijo» (paneo, inclinación y zoom: 3 incógnitas).".format(v, v))
 if D.sugiere is not None:
     cs1, cs2 = st.columns([1, 3])
     with cs1:
         if st.button("Sugerir plantilla (~15 s)"):
             with st.spinner("buscando H (intersecciones + chamfer + elipse; ~40 s la primera vez)..."):
-                ss.cands = D.sugiere(fr, detector_personas(), ss.get("g_det", "auto")) if deporte == "futbol" else D.sugiere(fr)
+                ss.cands = D.sugiere(fr, detector_personas(), ss.get("g_det", "auto"), centro_fijo) if deporte == "futbol" else D.sugiere(fr)
             ss.ver += 1
             st.rerun()
     with cs2:
@@ -362,11 +380,16 @@ if deporte == "futbol":
                    "CPU). Además una recta de campo debe tener césped a los dos lados. Las elipses las buscan `EdgeDrawing.detectEllipses` "
                    "y `findEllipses` (cv2.ximgproc), cada una con su escala de R y sus umbrales; el `fitEllipse` antiguo es solo comparación.")
         g1, g2, g3, g4 = st.columns(4)
-        metodo = g1.radio("Ajuste de rectas", ["ransac", "hough"], key="g_metodo", horizontal=True)
+        metodo = g1.radio("Ajuste de rectas", ["ransac", "hough", "fld"], key="g_metodo", horizontal=True,
+                          help="fld = FastLineDetector (cv2.ximgproc) sobre la respuesta de línea: mucho más rápido que RANSAC.")
         usar_pers = g2.checkbox("Ignorar bordes de personas", value=True, key="g_pers")
         usar_reg = g2.checkbox("Limitar al campo (gaussiana de césped)", value=True, key="g_region")
         tol_h = g3.slider("Tolerancia horizontal-ish (°)", 20, 70, 50, key="g_tolh")
         tol_v = g4.slider("Tolerancia vertical-ish (°)", 20, 70, 50, key="g_tolv")
+        f1, f2, f3, _ = st.columns(4)
+        fld_len = f1.slider("FLD: longitud mínima (px)", 8, 80, 20, key="g_fldlen", help="Solo se usa con el método fld.")
+        fld_merge = f2.checkbox("FLD: unir segmentos cercanos", value=True, key="g_fldmerge")
+        fld_techo = f3.slider("FLD: techo de R", 1.0, 8.0, 3.0, 0.5, key="g_fldtecho")
         g5, g6, g7, g8 = st.columns(4)
         c_lo = g5.slider("Canny bajo", 5, 60, 20, key="g_clo")
         c_hi = g6.slider("Canny alto", 20, 150, 60, key="g_chi")
@@ -386,7 +409,7 @@ if deporte == "futbol":
         fe_sc = e4.slider("findEllipses: score mínimo", 0.05, 0.95, 0.3, 0.05, key="g_fesc")
         fe_fi = e4.slider("findEllipses: fiabilidad mínima", 0.05, 0.95, 0.3, 0.05, key="g_fefi")
         res_g = grad_resultado(fr, cid, metodo, c_lo, max(c_hi, c_lo + 1), tol_h, tol_v, usar_pers, cesp, pico, usar_reg,
-                               det_el, (ed_grad, ed_anc, ed_cam), ed_techo, (fe_sc, fe_fi), fe_techo)
+                               det_el, (ed_grad, ed_anc, ed_cam), ed_techo, (fe_sc, fe_fi), fe_techo, (fld_len, fld_merge), fld_techo)
         solo_campo = st.checkbox("Ocultar las rectas descartadas", value=False, key="g_solo")
         pg = SGR.paneles_grad(res_g, mostrar_descartadas=not solo_campo, mostrar_fit=mostrar_fit)
         for j in range(0, len(pg), 2):
@@ -400,3 +423,45 @@ if deporte == "futbol":
         (st.dataframe(tab_el, hide_index=True, width="stretch") if tab_el else st.caption("Ningún detector ha encontrado elipses con estos umbrales."))
         st.markdown("**Rectas detectadas**")
         st.dataframe(SGR.tabla_lineas(res_g), hide_index=True, width="stretch")
+
+# ---------------------------------------------------------------- camera motion from stands and boards (soccer)
+# Separate zone on purpose: it never looks at the field. Points come from the NON-grass region, are tracked forward and
+# backward, and RANSAC keeps the ones that move together (the whole camera moves the whole background the same way).
+if deporte == "futbol":
+    st.divider()
+    if st.checkbox("Ver movimiento de cámara por KLT sobre la grada y la publicidad (sin mirar el campo)", value=False, key="ver_klt"):
+        st.caption("Se eligen esquinas SOLO fuera del césped (grada y vallas), se siguen del frame t al t+Δ y de vuelta (KLT adelante-atrás: "
+                   "las pistas que no vuelven a su sitio se descartan) y RANSAC se queda con las que se mueven de forma coherente. "
+                   "Jugadores, marcador y logos se mueven distinto y salen como atípicos. Con una cámara que solo gira y hace zoom, el "
+                   "fondo lejano da el movimiento imagen a imagen aunque el campo casi no tenga líneas.")
+        k1, k2, k3, k4 = st.columns(4)
+        gap = k1.slider("Separación Δ (frames)", 1, 100, 10, key="k_gap")
+        modelo_k = k1.radio("Modelo de movimiento", list(SCM.MOT.MODELS), key="k_model", horizontal=True)
+        max_c = k2.slider("Puntos (máx.)", 100, 2000, 800, 50, key="k_n")
+        calidad = k2.slider("Calidad de esquina", 0.001, 0.1, 0.01, 0.001, key="k_q", format="%.3f")
+        dmin = k3.slider("Distancia mínima entre puntos (px)", 3, 30, 8, key="k_d")
+        ventana = k3.slider("Ventana del KLT (px)", 7, 51, 21, 2, key="k_win")
+        niveles = k4.slider("Niveles de pirámide", 1, 6, 3, key="k_lv")
+        fb = k4.slider("Error adelante-atrás máx. (px)", 0.1, 5.0, 1.0, 0.1, key="k_fb")
+        k5, k6, k7 = st.columns(3)
+        ransac = k5.slider("Umbral de RANSAC (px)", 0.5, 10.0, 3.0, 0.5, key="k_ransac")
+        borde = k6.slider("Erosión del borde del césped (px)", 0, 30, 6, key="k_ero")
+        amp = k7.slider("Ampliar el desplazamiento dibujado", 1, 20, 5, key="k_amp")
+        fr1 = get_frame(deporte, v, i + gap)
+        if fr1 is None:
+            st.warning("No hay frame {} en este vídeo (Δ demasiado grande).".format(i + gap))
+        else:
+            rk = klt_resultado(fr, fr1, cid, gap, modelo_k, max_c, calidad, dmin, ventana, niveles, fb, ransac, borde)
+            H_klt = H if H is not None else semilla
+            if H_klt is None:
+                st.caption("Para ver la plantilla arrastrada al frame t+Δ, ajusta una H con 4+ clics o elige una sugerencia arriba.")
+            pk = SCM.panels(rk, fr, fr1, H_klt, amplify=amp)
+            for j in range(0, len(pk), 2):
+                cols = st.columns(2)
+                for col, (titulo, img_p, texto) in zip(cols, pk[j:j + 2]):
+                    col.markdown("**{}**".format(titulo))
+                    col.image(img_p, width="stretch")
+                    col.caption(texto)
+            if rk["M"] is not None:
+                st.markdown("**Homografía imagen a imagen (píxeles de trabajo, frame t → t+Δ)**")
+                st.dataframe(np.round(rk["M"], 5), hide_index=True, width="stretch")

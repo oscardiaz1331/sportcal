@@ -44,3 +44,25 @@ def test_annotate_app_renders_for_every_sport():
     for sport in at.sidebar.radio[0].options:
         at.sidebar.radio[0].set_value(sport).run()
         assert not at.exception, (sport, [str(e.value)[:200] for e in at.exception])
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not any(ROOT.glob("soccer*.mp4")), reason="no soccer clip on disk")
+def test_annotate_app_soccer_motion_zone_and_every_line_method_render():
+    at = AppTest.from_file(str(COMMON / "annotate_val_app.py"), default_timeout=300)
+    at.run()
+    at.sidebar.radio[0].set_value("futbol").run()
+    assert not at.exception
+    next(c for c in at.checkbox if c.key == "ver_klt").check()
+    at.run()
+    assert not at.exception, [str(e.value)[:200] for e in at.exception]
+    for model in next(r for r in at.radio if r.key == "k_model").options:
+        next(r for r in at.radio if r.key == "k_model").set_value(model)
+        at.run()
+        assert not at.exception, (model, [str(e.value)[:200] for e in at.exception])
+    next(c for c in at.checkbox if c.key == "ver_grad").check()
+    at.run()
+    for method in next(r for r in at.radio if r.key == "g_metodo").options:
+        next(r for r in at.radio if r.key == "g_metodo").set_value(method)
+        at.run()
+        assert not at.exception, (method, [str(e.value)[:200] for e in at.exception])

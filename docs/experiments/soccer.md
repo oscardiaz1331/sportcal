@@ -114,6 +114,26 @@ diagonal (wrong). C was calibrated on f900 / f3000, which are different from the
 yet. This is the most promising soccer lead: if the camera centre really is fixed per broadcast, the solver's search space drops
 from 8 DoF to 3.
 
+### 3c. Automatic centre calibration and the fixed-centre solver, measured (2026-09-21)
+
+`lab/soccer/camera_center.py` solves 60 frames spread over the clip with `search_lines`, keeps those with score >= 0.6, pinhole mismatch
+<= 0.05 and a plausible position, and takes the median of the decomposed centres. 13 of 60 frames were accepted (the rest are
+close-ups or have too few lines). The individual centres are scattered (y from -57.6 to -69.7 m, x from -7.2 to 1.3 m: frames with two
+or three primitives are ill-conditioned) but their median, **(-2.75, -68.2, 13.6) m from 10 votes**, lands within 0.6 m of the manual
+value of 3b. Lesson: the first run (16 frames) had only 3 accepted frames, and a 2 m outlier gate around the median of 3 discarded
+the good ones and returned a centre 3.6 m off; the gate is now 4 m and the tool now warns when fewer than 8 frames voted.
+
+`search_fixed_center` with that centre against the pseudo-GT homographies of f900 / f3000 (grid of pitch points, median pixel distance
+in 960-px working coordinates): **7.4 px and 5.2 px**, against 3.1 px and 19.9 px for the 8-DoF line solver on the same frames. On f1500 and
+f2400 (no reference) the fixed-centre search scores 0.45 / 0.45 where the 8-DoF line solver scores 0.28 / 0.33. Refine at least the top 4 coarse
+winners: refining only the best one failed on f900 / f3000 (score 0.35 / 0.22) because a 2-degree pan step is ~60 px at f/w 1.9, wider than the coarse
+tolerance, so the true pose is not always the best node. Widening the coarse tolerance made it worse (a wide tau flattens the scores),
+and a finer grid (0.7 deg) gave the same result at 10x the time. A synthetic test (`tests/test_soccer_solver.py`) shows a 25 m error in the
+centre costs >= 5x in accuracy; sensitivity on real frames: 0.5 m ~ 4-5 px, 5 m ~ 24-61 px.
+
+**Caveats:** one clip, one camera, two frames with a reference, and those frames are near (not identical to) calibration frames 944 / 3047.
+The centre needs a wide shot with lines to calibrate; a broadcast that changes camera position would break the assumption.
+
 ## 4. Line extraction by gradient on the full image - `lab/soccer/gradient.py`
 
 Continuous response R = max(L+/8.5, a+/5, b-/5); Canny edges; individual RANSAC lines (an edge only supports a line if its
@@ -137,6 +157,19 @@ mask): mask + Hough 78/100 and 86/86; field gradient + RANSAC 74/100 and 48/66; 
 71/62 at 8-35 ms (RANSAC takes 2-3 s); `EdgeDrawing.detectLines` similar but a little worse. All raise raw recall (100 / 86%) at
 the cost of precision (64 / 43%) unless the "grass on both sides" filter is applied. Corners are almost never detected (0 in 3
 of 4 frames), so corner snapping has effectively never fired.
+
+**Line methods integrated in `gradient.procesa(metodo=...)`** (2026-09-21, grass region first, field lines only = "grass on both
+sides" filter, single seed; f900 / f3000, reference biased towards the mask):
+
+| `metodo` | recall | precision | time per frame |
+|---|---|---|---|
+| `ransac` | 78% / 57% | 100% / 67% | 0.8-1.0 s |
+| `hough` (Hough on the gradient edges) | 78% / 71% | 100% / 83% | 0.1 s |
+| `fld` (`FastLineDetector`, length 20, merged) | 67% / 57% | 100% / 57% | 0.1 s |
+
+With the region applied first, Hough on the gradient edges went from unusable (recall 22% / 14% in the first unmasked test) to the
+best gradient-side method, at a tenth of the RANSAC time; it is now comparable to mask + Hough. Two frames and a reference that
+favours the mask: read it as "worth keeping", not as a ranking.
 
 **Grass region before the response** (owner's rule, applied 2026-09-21): the region is applied BEFORE computing R and its
 gradient (outside is filled with the median grass first) rather than clipping edges afterwards. Result is mixed: f900 improves
@@ -181,3 +214,67 @@ overwrites `cv2.pyd` with a build without ximgproc (happened on 2026-09-20 20:51
 4. Which circle is the centre circle (ellipse centre on the halfway line).
 5. Whether the hockey segmentation route (train a line-segmentation U-Net on reprojected masks, then DLT) is worth repeating
    for soccer once labels exist; the hockey results (`hockey.md` §5-6) say it needs homogeneous data.
+6. Long-horizon propagation: how often to re-anchor the chained homography on a solved frame, and how to detect a shot cut
+   (the mean absolute difference between consecutive frames jumps from ~7 to ~48 at the cut found in §9) so the chain resets.
+7. Reuse the previous frame's background mask (warped by the estimated motion) instead of re-running the grass segmentation at every
+   step: the segmentation is most of the ~0.2 s per pair.
+
+## 9. Camera motion from the stands - `core/motion.py`, `lab/soccer/camera_motion.py`
+
+**Question:** can the image-to-image motion of the broadcast camera be recovered from the NON-grass region (stands, boards) alone, so a
+field homography solved on a rich frame can be carried to frames where the field has almost no lines? For a camera that only pans,
+tilts and zooms about a fixed centre (§3b) any two frames are related by a homography whatever the depth of the scene, so a distant
+textured background is a valid source. (A KLT tracker on the ice plane was a dead end for hockey - `hockey.md`, specular reflections
+on the ice; this one never touches the playing surface.)
+
+**Method:** Shi-Tomasi corners inside the eroded non-grass region -> pyramidal Lucas-Kanade forward and backward -> keep tracks whose
+round trip lands within 1 px -> RANSAC homography (3 px) -> refuse the fit below 30 inliers. Players, the score bug and animated
+boards move differently and fall out as outliers. Independent check: warp the field-line mask of frame 0 by the estimated motion and
+measure how many line pixels land within 3 px of a line pixel of frame `t+gap` (the field lines were never seen by the tracker).
+soccer.mp4 from frame 900 (wide shot with the left penalty area), 800 features, 960 px working width.
+
+    python -m sportcal.lab.soccer.camera_motion --video soccer --frame 900 --gaps 1,3,5,10,25,50
+    python -m sportcal.lab.soccer.camera_motion --video soccer --frame 900 --chain-step 5 --chain-n 60 --check-every 5
+
+**Result 1 - background motion carries the unseen field lines** (fraction of warped field-line pixels within 3 px, with / without motion):
+
+| gap (frames) | 1 | 3 | 5 | 10 | 25 | 50 |
+|---|---|---|---|---|---|---|
+| inliers / 800 | 800 | 736 | 721 | 718 | 713 | 512 |
+| median inlier residual (px) | 0.11 | 0.15 | 0.07 | 0.07 | 0.12 | 0.15 |
+| lines within 3 px, KLT | 97% | 93% | 94% | 93% | 91% | 90% |
+| lines within 3 px, no motion | 98% | 96% | 89% | 72% | 59% | 33% |
+
+The camera barely moves in this stretch (2-5 px per 1-10 frames), so the benefit shows from a few frames onwards. The median
+line-to-line distance saturates at 0 (the painted lines are several pixels thick), hence the 3 px fraction.
+
+**Result 2 - chaining the field homography** (solved at f900 with the intersection solver, then only multiplied by the estimated
+motions; compared at checkpoints with the solver's own solution for that frame: score on that frame's line mask and median distance
+between the two projected templates, px at 1920):
+
+| step | checkpoints | distance between templates | outcome |
+|---|---|---|---|
+| 10 frames x 8 (3.2 s) | every step | 1.7, 2.0, 6.6, 1.9, 4.9, 6.2, 6.8, 2.9 | propagated score 0.66-0.76 vs solved 0.71-0.76 |
+| 25 frames x 8 | every step | 2.8, 4.9, then 15.8, 184, 4381 | lost from f975 (inliers 85, 60, 35) |
+| 5 frames x 60 (up to 4 s) | every 5 steps | 2.9, 5.2, 4.8, 5.6 | lost at f1016-1018 (below) |
+
+The 25-frame failure is not the pyramid: 5-6 levels and 31-41 px windows give the same counts (inliers at 25 frames: 85 default, 95,
+82, 77, 131). Tracks vanish because the camera pans at ~2.3 px/frame with motion blur, so most points of the start frame are gone or
+unrecognisable 25 frames later. Short steps (1-5 frames) keep ~670-800 inliers.
+
+The loss at f1016-1018 is a **real shot cut**: the mean absolute difference between consecutive frames jumps from ~7 to 47.6 and the
+inliers drop to 0 for ~40 frames (a close-up, no non-grass features to speak of), then the wide shot returns at f1056 with 538 inliers
+and the same motion. The estimator failing there is correct.
+
+**Bug found on the way:** at f1050-1054 a fit on 7 and 9 inliers was returned with zoom x16.8 and dx -3416 px. `estimate_motion` now
+refuses fits below `min_inliers` (30); the unit test constructs a case where the fit exists but is weakly supported and fails when the
+guard is removed.
+
+**Decision:** adopt for propagation with **short steps (<= 5 frames)** and a reset on a shot cut; it is not in the product yet and needs a
+cut detector plus a re-anchoring policy (open questions 6-7). Drift stayed at ~5 px (1920) over 4 s against the solver's own solution.
+The forward-backward check and RANSAC are both load-bearing: removing either turns a synthetic unit test red
+(`tests/test_motion.py`, mutation-checked).
+
+**Caveats:** one clip, one camera, one starting frame. The reference for chaining is the solver's own solution, whose noise is a few
+pixels, so distances of 2-7 px are at the noise floor. The line-alignment fraction cannot exceed ~0.94 because the line masks contain
+player residue and occlusions. Field-line alignment was not run for the fast-pan stretch beyond the chained checkpoints.
