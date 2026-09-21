@@ -237,8 +237,10 @@ class FieldSolver:
         return Hn, len(pairs)
 
     # -- shared: pick distinct candidates, refine ---------------------------------------
-    def _best_distinct(self, Hs, scores, top, min_dist=0.03):
-        """Top-`top` DISTINCT hypotheses (their 4 image anchors land > 2 m apart in the world), refined."""
+    def _best_distinct(self, Hs, scores, top, min_dist=0.03, refiner=None):
+        """Top-`top` DISTINCT hypotheses (their 4 image anchors land > 2 m apart in the world), refined.
+
+        `refiner(i)` -> (H, score) refines hypothesis i; the default is the free 8-parameter `refine`."""
         anchors = np.array([[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]]) * [self.w, self.h]
         order = np.argsort(-scores)[:400]
         chosen, signatures = [], []
@@ -256,7 +258,7 @@ class FieldSolver:
                 break
         results = []
         for i in chosen:
-            Hr, s = self.refine(Hs[i])
+            Hr, s = refiner(i) if refiner is not None else self.refine(Hs[i])
             results.append({"H": canonicalize_H(Hr), "score": s, "score0": float(scores[i]), "H0": Hs[i]})
         return sorted(results, key=lambda r: -r["score"])
 
@@ -281,6 +283,42 @@ class FieldSolver:
             best = H_of(r.x)
             H0 = best
         return best, float(self.score(best[None], True)[0])
+
+    # -- generator 4: FIXED camera centre, only pan / tilt / zoom vary ---------------------
+    def refine_ptz(self, center, pan, tilt, f):
+        """Maximise the fine score over (pan, tilt, focal) with the camera centre held fixed.
+
+        Same tau cascade as `refine`. Parametrised by (pan, tilt, log f) so one step moves the image by a comparable
+        amount in each. The result is always an exact pinhole camera at `center`, unlike the free 8-parameter fit."""
+        c = np.asarray(center, float)
+
+        def H_of(q):
+            return pose_to_H(np.r_[c, q[0], q[1], np.exp(q[2])][None], self.w, self.h)[0]
+
+        q = np.array([pan, tilt, np.log(f)])
+        for tau in (0.04 * self.w, 0.015 * self.w, 0.006 * self.w, self.tau):
+            fine = tau == self.tau
+            r = minimize(lambda x: -self.score(H_of(x)[None], fine, tau)[0], q, method="Powell",
+                         options={"xtol": 1e-4, "ftol": 1e-5, "maxfev": 300, "direc": np.diag([0.02, 0.02, 0.05])})
+            q = r.x
+        H = H_of(q)
+        return H, float(self.score(H[None], True)[0])
+
+    def search_fixed_center(self, center, top=4, pan_range=(-60.0, 60.0), tilt_range=(4.0, 40.0), f_range=(0.6, 6.0),
+                            steps=(2.0, 2.0, 30)):
+        """Hypotheses for a broadcast camera whose CENTRE is known (it only pans, tilts and zooms): a 3-D grid over
+        pan (deg), tilt (deg) and focal length (in image widths, log-spaced), scored with the wide tau, then each
+        distinct winner refined with `refine_ptz`. `steps` = (pan step deg, tilt step deg, number of focal values).
+        With a known centre a single ellipse or a couple of lines is enough to fix the pose."""
+        c = np.asarray(center, float)
+        pans = np.radians(np.linspace(pan_range[0], pan_range[1], max(2, int(round((pan_range[1] - pan_range[0]) / steps[0])) + 1)))
+        tilts = np.radians(np.linspace(tilt_range[0], tilt_range[1], max(2, int(round((tilt_range[1] - tilt_range[0]) / steps[1])) + 1)))
+        focals = self.w * np.geomspace(f_range[0], f_range[1], int(steps[2]))
+        A, T, F = np.meshgrid(pans, tilts, focals, indexing="ij")
+        grid = np.column_stack([np.tile(c, (A.size, 1)), A.ravel(), T.ravel(), F.ravel()])
+        Hs = pose_to_H(grid, self.w, self.h)
+        return self._best_distinct(Hs, self.score(Hs, tau=0.04 * self.w), top,
+                                   refiner=lambda i: self.refine_ptz(c, grid[i, 3], grid[i, 4], grid[i, 5]))
 
 
 # ---------------------------------------------------------------- hypotheses from detected lines

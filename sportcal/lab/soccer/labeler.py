@@ -174,7 +174,7 @@ def proyecta_pendientes(H_sin_giro, pts, w, h, margen=4):
 
 # ---------------------------------------------------------------- sugerencia automatica
 
-def sugiere(frame_bgr, modelo=None, det_elipse="auto"):
+def sugiere(frame_bgr, modelo=None, det_elipse="auto", center=None):
     """Candidatas de H del solver de soccer_field para este frame, en pixeles del frame ORIGINAL:
     [{"via","score","H","nota"}] mejor primero. Vias: intersecciones (rectas de la mascara), chamfer
     (rejilla de poses) y, si se pasa `modelo` (YOLO de personas, en CPU), la ELIPSE del circulo detectada
@@ -183,6 +183,8 @@ def sugiere(frame_bgr, modelo=None, det_elipse="auto"):
     0.4*esquinas, asi que con evidencia la escala llega a ~2). H sale canonica: banda cercana abajo.
     det_elipse: que detector de elipses alimenta al solver ("auto", "edgedrawing", "find" o "fit", ver
     soccer_grad.procesa). Tarda ~15 s sin modelo, ~40 s con el. Un plano cercano da puntuaciones bajas: no fiarse.
+    center: centro fijo de la camara (x, y, z) en metros, calibrado con `camera_center`; si se da, se anade la via
+    "centro fijo" (solo paneo, inclinacion y zoom: 3 incognitas en vez de 8).
     OJO: la puntuacion de una candidata con evidencia incluye el termino de elipse, asi que NO es comparable con la
     de otra que se ajusta peor a una elipse imprecisa; mirar el dibujo, no solo el numero."""
     from sportcal.lab.soccer import evaluation as EV
@@ -203,6 +205,8 @@ def sugiere(frame_bgr, modelo=None, det_elipse="auto"):
     vias = [("intersecciones", campo.search_lines()), ("chamfer", campo.search_pose())]
     if E is not None:
         vias.append(("elipse", campo.search_ellipse(E)))
+    if center is not None:
+        vias.append(("centro fijo", campo.search_fixed_center(center)))
     out = []
     for via, r in vias:
         if not r:
@@ -419,6 +423,22 @@ def frames_candidatos(paso_s=2.0):
         cap.release()
         out += [(v, i) for i in range(0, n, int(round(fps * paso_s))) if "{}_{:06d}".format(v, i) not in hecho]
     return out
+
+
+def center_path(video):
+    """Where the calibrated camera centre of `video` is stored (see lab/soccer/camera_center.py)."""
+    return OUT / "camera_center_{}.json".format(video)
+
+
+def save_center(video, center, info=None):
+    OUT.mkdir(parents=True, exist_ok=True)
+    center_path(video).write_text(json.dumps({"center": [float(x) for x in center], **(info or {})}), encoding="utf-8")
+
+
+def load_center(video):
+    """{"center": [x, y, z], ...} calibrated for `video`, or None."""
+    p = center_path(video)
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
 def lee_frame(v, i):

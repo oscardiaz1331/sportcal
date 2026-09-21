@@ -73,3 +73,28 @@ def pinhole_residual(Hs, w, h):
 def is_pinhole_consistent(Hs, w, h, tol=0.4):
     """Bool (n,): the homography can come from a reasonable pinhole camera."""
     return pinhole_residual(Hs, w, h)[1] < tol
+
+
+def decompose_H(H, w, h):
+    """Split ONE field homography into a pinhole pose, the inverse of `pose_to_H`.
+
+    Returns {"f", "C", "pan", "tilt", "mismatch"}: focal length in pixels, camera centre (3,) in the units of the world,
+    pan and tilt in radians, and the pinhole mismatch (0 = exactly a pinhole camera). None when H is not a pinhole camera
+    at all (no real focal length). The focal length comes from the orthogonality of the plane's axes, so it is poorly
+    conditioned when the view holds few primitives: the centre of such a frame can be wildly off even if the projection
+    looks right, which is why a centre is best calibrated from several rich frames of the same camera."""
+    H = np.asarray(H, float)
+    f2, mismatch = pinhole_residual(H[None], w, h)
+    if not np.isfinite(f2[0]) or f2[0] <= 0:
+        return None
+    f = float(np.sqrt(f2[0]))
+    B = np.linalg.inv(np.array([[f, 0, w / 2.0], [0, f, h / 2.0], [0, 0, 1.0]])) @ H
+    lam = 1.0 / np.linalg.norm(B[:, 0])
+    r1, r2, t = lam * B[:, 0], lam * B[:, 1], lam * B[:, 2]
+    if t[2] < 0:                                      # the plane must be in front of the camera
+        r1, r2, t = -r1, -r2, -t
+    U, _, Vt = np.linalg.svd(np.stack([r1, r2, np.cross(r1, r2)], 1))
+    R = U @ Vt                                        # rows: right, down, forward (as in pose_to_H)
+    forward = R[2, :]
+    return {"f": f, "C": -R.T @ t, "pan": float(np.arctan2(forward[0], forward[1])), "tilt": float(np.arcsin(-forward[2])),
+            "mismatch": float(mismatch[0])}

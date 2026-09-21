@@ -224,6 +224,44 @@ def hough_lineas(ed, idx, shape, tol_px=2.0, tol_ang_deg=15.0, min_in=35, min_le
     return lineas
 
 
+def fld_lineas(resp, u8, length=20, merge=True, tol_frac=0.012, ang_deg=4.0, n_max=14):
+    """Lines from cv2.ximgproc.FastLineDetector run on the 8-bit line response `u8`.
+
+    The detector returns many short segments; they are grouped by angle and position (all segment ends within
+    `tol_frac` of the image width of the group line, angle within `ang_deg`) and each group is fitted like the
+    other methods do, using points sampled along the segments and the gradient of R there, so the result can be
+    paired, annotated and filtered exactly like RANSAC or Hough lines. The `n_max` longest groups are kept."""
+    det = cv2.ximgproc.createFastLineDetector(int(length), 1.41421356, 30, 60, 3, bool(merge))
+    raw = det.detect(u8)
+    if raw is None:
+        return []
+    segs = np.asarray(raw, float).reshape(-1, 4)
+    h, w = resp["R"].shape
+    seg_len = np.hypot(segs[:, 2] - segs[:, 0], segs[:, 3] - segs[:, 1])
+    seg_ang = np.arctan2(segs[:, 3] - segs[:, 1], segs[:, 2] - segs[:, 0]) % np.pi
+    free = np.ones(len(segs), bool)
+    groups = []
+    for i in np.argsort(-seg_len):
+        if not free[i] or seg_len[i] < 8:
+            continue
+        n = np.array([-np.sin(seg_ang[i]), np.cos(seg_ang[i])])
+        c = -(n @ segs[i, :2])
+        near = (np.abs(segs[:, :2] @ n + c) < tol_frac * w) & (np.abs(segs[:, 2:] @ n + c) < tol_frac * w)
+        member = free & near & (_angdiff(seg_ang, seg_ang[i]) < np.radians(ang_deg))
+        free &= ~member
+        pts = []
+        for x1, y1, x2, y2 in segs[member]:
+            t = np.linspace(0.0, 1.0, max(2, int(np.hypot(x2 - x1, y2 - y1) / 2)))
+            pts.append(np.stack([x1 + t * (x2 - x1), y1 + t * (y2 - y1)], 1))
+        pts = np.concatenate(pts)
+        xi = np.clip(np.round(pts[:, 0]).astype(int), 0, w - 1)
+        yi = np.clip(np.round(pts[:, 1]).astype(int), 0, h - 1)
+        grad = np.stack([resp["gx"][yi, xi], resp["gy"][yi, xi]], 1).astype(float)
+        groups.append((seg_len[member].sum(), _linea(pts, grad)))
+    groups.sort(key=lambda t: -t[0])
+    return [ln for _, ln in groups[:n_max]]
+
+
 def _dedup(lineas, ang_deg=2.0, dist_px=3.0):
     """Funde las rectas casi identicas (las familias solapan: la misma recta sale dos veces)."""
     out = []
@@ -526,9 +564,13 @@ def esquinas(lin_h, lin_v, shape, margen=0.05, holgura=40.0):
 def procesa(img, modelo=None, metodo="ransac", canny=(20, 60), tol_h=50.0, tol_v=50.0, usar_personas=True,
             tol_px=2.0, min_in=35, n_max=10, resp=None, cajas=None, cesped_min=0.3, pico_min=0.5,
             usar_region=True, margen_region=2, seed=0, det_elipse="auto", ed_params=(36, 8, 10), ed_techo=6.0,
-            fe_params=(0.3, 0.3), fe_techo=2.0):
+            fe_params=(0.3, 0.3), fe_techo=2.0, fld_params=(20, True), fld_techo=3.0):
     """Todo el proceso sobre un frame BGR. `resp` y `cajas` se pueden pasar ya calculados
-    (son lo caro: respuesta ~0.5 s, YOLO en CPU ~1-3 s) para reajustar solo los parametros."""
+    (son lo caro: respuesta ~0.5 s, YOLO en CPU ~1-3 s) para reajustar solo los parametros.
+
+    metodo: "ransac" (RANSAC sobre los bordes, por familia), "hough" (Hough sobre los bordes, por familia) o "fld"
+    (FastLineDetector sobre la respuesta de linea, `fld_params` = (longitud minima, unir segmentos), `fld_techo` = valor de R
+    que se manda a 255); con "fld" las rectas se reparten en las dos familias por su inclinacion con las mismas tolerancias."""
     resp = _resp_sel(resp if resp is not None else respuesta(img), usar_region)
     if cajas is None:
         cajas = personas(img, modelo) if (usar_personas and modelo is not None) else np.zeros((0, 5))
@@ -537,9 +579,15 @@ def procesa(img, modelo=None, metodo="ransac", canny=(20, 60), tol_h=50.0, tol_v
     ed = bordes(resp, cajas, canny, usar_region=usar_region, margen_region=margen_region)
     ih, iv = familias(ed, tol_h, tol_v)
     shape = resp["R"].shape
-    f = (lambda idx: ransac_lineas(ed, idx, tol_px=tol_px, min_in=min_in, n_max=n_max, seed=seed)) if metodo == "ransac" else \
-        (lambda idx: hough_lineas(ed, idx, shape, tol_px=tol_px, min_in=min_in, n_max=n_max))
-    lh, lv = _dedup(f(ih)), _dedup(f(iv))
+    if metodo == "fld":
+        fld = fld_lineas(resp, entrada_u8(resp, cajas, fld_techo), *fld_params)
+        direction = lambda ln: np.arctan2(ln["abc"][0], -ln["abc"][1]) % np.pi          # angle of the line itself
+        lh = _dedup([ln for ln in fld if _angdiff(direction(ln), 0.0) <= np.radians(tol_h)])
+        lv = _dedup([ln for ln in fld if _angdiff(direction(ln), np.pi / 2) <= np.radians(tol_v)])
+    else:
+        f = (lambda idx: ransac_lineas(ed, idx, tol_px=tol_px, min_in=min_in, n_max=n_max, seed=seed)) if metodo == "ransac" else \
+            (lambda idx: hough_lineas(ed, idx, shape, tol_px=tol_px, min_in=min_in, n_max=n_max))
+        lh, lv = _dedup(f(ih)), _dedup(f(iv))
     todas = _dedup(lh + lv)
     exp = np.zeros(len(ed["pts"]), bool)
     for ln in todas:

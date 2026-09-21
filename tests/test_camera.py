@@ -58,3 +58,19 @@ def test_detect_lines_finds_two_crossing_lines():
 
 def test_detect_lines_of_an_empty_mask_is_empty():
     assert detect_lines(np.zeros((100, 200), np.uint8)).shape == (0, 3)
+
+
+def test_decompose_is_the_inverse_of_pose_to_H():
+    rng = np.random.default_rng(0)
+    for _ in range(8):
+        pose = np.array([rng.uniform(-30, 30), rng.uniform(-80, -40), rng.uniform(8, 30), rng.uniform(-0.8, 0.8),
+                         rng.uniform(0.15, 0.7), W * rng.uniform(0.8, 4.0)])
+        d = C.decompose_H(C.pose_to_H(pose, W, H)[0], W, H)
+        assert np.allclose(d["C"], pose[:3], atol=1e-6)
+        assert np.allclose([d["pan"], d["tilt"], d["f"]], pose[3:], rtol=1e-6, atol=1e-8) and d["mismatch"] < 1e-9
+
+
+def test_decompose_ignores_the_arbitrary_sign_of_a_homography_and_rejects_non_cameras():
+    Hp = C.pose_to_H(POSE, W, H)[0]
+    assert np.allclose(C.decompose_H(-3.0 * Hp, W, H)["C"], POSE[0, :3], atol=1e-6)
+    assert C.decompose_H(np.array([[1.0, 3.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), W, H) is None

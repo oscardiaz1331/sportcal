@@ -75,3 +75,47 @@ def test_no_hypotheses_from_too_few_lines_and_solver_rejects_a_blank_mask():
     assert len(line_hypotheses(np.zeros((3, 3)), W, H_IMG)) == 0
     solver = FieldSolver(np.zeros((H_IMG, W), np.uint8))
     assert solver.search_lines() == []
+
+
+def _strip(mask, x0_frac=0.3, width_frac=0.35):
+    """Keep only a vertical strip of the mask: a zoomed-in view with few primitives."""
+    out = np.zeros_like(mask)
+    x0, w = int(W * x0_frac), int(W * width_frac)
+    out[:, x0:x0 + w] = mask[:, x0:x0 + w]
+    return out
+
+
+def _local_search(solver, center, pose, **kw):
+    """Fixed-centre search on a small grid around the true pan / tilt / focal (fast enough for a test)."""
+    pan, tilt = np.degrees(pose["pan"]), np.degrees(pose["tilt"])
+    return solver.search_fixed_center(center, top=2, pan_range=(pan - 8, pan + 8), tilt_range=(tilt - 8, tilt + 8),
+                                      f_range=(pose["f"] / W / 1.5, pose["f"] / W * 1.5), steps=(2.0, 2.0, 11), **kw)
+
+
+@pytest.mark.slow
+def test_fixed_centre_solves_a_view_with_few_primitives_and_a_wrong_centre_does_not(scenes):
+    from sportcal.core.camera import decompose_H
+    for H_true, mask in scenes:
+        pose = decompose_H(H_true, W, H_IMG)
+        strip = _strip(mask)
+        good = _local_search(FieldSolver(strip), pose["C"], pose)[0]
+        assert reprojection_error(good["H"], H_true, W, H_IMG) * K1920 < 10.0
+        bad = _local_search(FieldSolver(strip), pose["C"] + np.array([0.0, 25.0, 0.0]), pose)[0]
+        assert reprojection_error(bad["H"], H_true, W, H_IMG) * K1920 > 5 * reprojection_error(good["H"], H_true, W, H_IMG) * K1920
+
+
+@pytest.mark.slow
+def test_fixed_centre_result_is_an_exact_pinhole_camera_at_that_centre(scenes):
+    from sportcal.core.camera import decompose_H
+    H_true, mask = scenes[0]
+    pose = decompose_H(H_true, W, H_IMG)
+    best = _local_search(FieldSolver(_strip(mask)), pose["C"], pose)[0]
+    d = decompose_H(best["H"], W, H_IMG)
+    assert d["mismatch"] < 1e-6 and np.allclose(d["C"], pose["C"], atol=1e-4)
+
+
+def test_robust_centre_drops_a_wild_vote():
+    from sportcal.lab.soccer.camera_center import robust_centre
+    votes = np.array([[-3.3, -67.9, 13.3], [-3.2, -68.0, 13.4], [-3.4, -67.8, 13.2], [30.3, -34.2, 5.6]])
+    centre, spread, n = robust_centre(votes)
+    assert n == 3 and np.allclose(centre, [-3.3, -67.9, 13.3], atol=0.11) and (spread < 0.3).all()
