@@ -278,3 +278,27 @@ The forward-backward check and RANSAC are both load-bearing: removing either tur
 **Caveats:** one clip, one camera, one starting frame. The reference for chaining is the solver's own solution, whose noise is a few
 pixels, so distances of 2-7 px are at the noise floor. The line-alignment fraction cannot exceed ~0.94 because the line masks contain
 player residue and occlusions. Field-line alignment was not run for the fast-pan stretch beyond the chained checkpoints.
+
+## 10. Are the grass stripes normative? (2026-09-21)
+
+**No rule fixes them.** IFAB Law 1 only asks for a rectangular pitch with continuous lines and, for artificial turf, a green colour; nothing
+about mowing. The stripes are not paint: a reel mower bends the blades toward or away from the camera, so the two shades are the same grass
+seen with different reflection, and **they swap when seen from the opposite side of the pitch**. Direction, width and pattern (straight, diagonal,
+checkerboard, circles) are the groundsman's choice for looks, turf wear and TV, and change from week to week. Secondary sources say some leagues
+regulate it (Serie A: cutting height and rectangular parallel bands, for television yield) but I found no primary text, so treat that as unverified.
+A rotary mower or a single-direction cut gives no stripes at all.
+
+Measured on our two clips (L channel of the grass region, perspective trend removed, Otsu split into two classes; an upper bound because
+players and line residue add to it): `soccer` shows two shades ~11-16 L apart, `soccer2` 9-25 L apart, and the gap changes with the view
+angle inside the same clip (soccer2: 24 L at f400, 9 L at f4500). Both stadiums are striped, but with different width and contrast.
+
+**Consequences:** the grass model must accept two shades of green (the robust Gaussian with chi2 10.17 does), the mask must never rely on stripes,
+and stripe edges must not be read as field lines (the "grass on both sides" filter of §4 is what protects against that). Stripes are at best a soft
+cue (their edges are usually parallel to the pitch axes) that cannot be assumed; not used.
+
+Sources: theifab.com/laws/latest/the-field-of-play, killingley.co.uk (mowing patterns), brightview.com (striping), archysport.com (Serie A).
+
+**soccer2 (Real Madrid - Barcelona broadcast, 8200 frames):** the automatic centre calibration accepted only 2 of 60 frames (centres 6 m apart, spread 6.4 m,
+z ~9-10 m against 13.6 m in `soccer`), so no centre was saved for it. Solver scores on sampled frames were 0.32-0.61: this broadcast is closer and
+frames rarely show the two whole area boxes. Whether the fixed-centre idea holds here is not established.
+
