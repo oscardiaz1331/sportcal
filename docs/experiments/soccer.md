@@ -313,7 +313,7 @@ indistinguishable from the stands alone (the corners are stand corners). The sta
 **What does help: pulling the chained H back onto the lines at every step** (`FieldSolver.refine(H, taus=(0.015, 0.006))`, ~0.6 s a step). Chain
 from f900, 5-frame steps, 20 steps, distance to an independent re-solve of that frame / line score: unrefined 5.6 px and 0.61, refined
 3.5 px and 0.70 (the re-solve scores 0.70). The score gain is partly circular (refinement maximises that score), the distance to the re-solve
-is the independent part. It is on by default in the viewer. One clip, one start frame.
+is the independent part. One clip, one start frame. **Corrected by section 12: against hand labels it does more harm than good; it is off by default.**
 
 **Viewer:** the KLT zone plays the tracking over the clip (`track_video`, `render_step`): from the current frame and template, step by step,
 green = background points supporting the step, yellow = carried template; stops on its own when the background is lost.
@@ -325,4 +325,27 @@ mirror-image family is excluded by orientation (a real camera never sees the mir
 canonicalises. If all the clicked points lie on the halfway line the fit can be ambiguous; the app says so and asks for a point off that line.
 Checked only on synthetic scenes (`tests/test_circle.py`: exact with 2 clicks and a clean outline, within a few px with 1 px of click noise, and
 better than a 4-point DLT when the four clicks are poorly spread); **not measured yet on hand-labelled real frames**.
+
+## 12. Checks against the hand labels (13 frames of `soccer`, 8 of them with the ellipse; 2026-09-21)
+
+The first labels independent of the solvers. Errors are the median distance (px at 1920) between two projected pitch grids on the points visible in
+the label's frame; a label has a few px of noise of its own.
+
+* **Ellipse labelling works, and it was needed.** In f1500 and f1550 all five clicked points lie on the halfway line, so a point-only fit is impossible
+  (collinear); ellipse + points gives the saved H. Re-fitting from the ellipse and only two clicks (centre spot + a circle x halfway-line crossing)
+  lands within 1.0, 4.4, 7.4 and 5.7 px of the H saved with all the clicks. The two crossings without the centre spot are correctly reported as ambiguous
+  (5 homographies, 148 px). (Comparing with the saved H is otherwise circular: it was produced by the same fit.)
+* **Automatic solvers** (mask only, no person model): the line-intersection solver is good when it works (8-11 px on f900, f950, f2200, f2250) but is
+  wrong by 170-6800 px on the circle-only views (f1500, 1550, 1600, 1650, 1700, 2350) and its score does not tell (0.66 on f1600, 958 px). The
+  fixed-centre solver stays within 4-34 px on 12 of the 13 frames (fails on f1000, score 0.15), median ~22 px; the score of "chamfer" says nothing. Best
+  by score is not best by error. The fixed-centre floor of 15-34 px on the circle views is far from the 8 px target.
+* **The hand labels do not describe a fixed-centre pinhole.** Decomposing each label gives a camera y of -58 to -63 m at f/w 1.3 (circle views) and -72 to
+  -100 m at f/w 2.0-2.5, with pinhole mismatch 0.05-0.37: the recovered centre drifts with the focal length (zoom lens, principal point or distortion not
+  modelled, or label noise). Using the "circle-view" centre (-0.4, -59, 13.8) instead of the calibrated one made the fixed-centre solver worse
+  (48-343 px against 15-34 px), so the label-implied centres are not the truth either. Open: model the centre as a function of zoom, or add lens distortion.
+* **KLT chain, 10 steps of 5 frames (50 frames) from one label to the next label:** KLT alone ends 3.4-12 px from the label in 7 of 10 pairs (median ~8 px;
+  starting label and end label both carry noise), 35 px on f2250 -> f2300 and 282 px on f2300 -> f2350; standing still would be 54-725 px off. **Adding the
+  per-step line refinement made 5 of 10 pairs worse (up to 31 px) and helped 3**, the opposite of what the comparison with the solver's own re-solve
+  suggested in section 11: it drifts onto the wrong line. It is now off by default. f2300 has a pinhole mismatch of 0.37 as a label, so the last pair may be a
+  bad label rather than a bad chain.
 

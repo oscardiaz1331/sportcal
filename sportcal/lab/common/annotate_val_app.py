@@ -531,12 +531,13 @@ if deporte == "futbol":
         # ---- play the tracking over the clip: step by step from this frame, carrying the template
         st.markdown("**Reproducir el seguimiento sobre el vídeo**")
         st.caption("Parte de este frame con la plantilla actual (tus clics o la sugerencia elegida) y la arrastra frame a frame con el movimiento del "
-                   "fondo; con la casilla marcada, en cada paso la vuelve a pegar a las líneas pintadas de ese frame (cuesta ~1 s por paso). "
+                   "fondo; con la casilla marcada (experimental, ver ayuda), en cada paso la vuelve a pegar a las líneas pintadas de ese frame (cuesta ~1 s por paso). "
                    "Los puntos verdes son las esquinas de fondo que sostienen el paso. Se para solo si pierde el fondo (corte de plano o primer plano).")
         v1, v2, v3, v4 = st.columns(4)
         v_paso = v1.slider("Frames entre pasos", 1, 10, 5, key="kv_step", help="Con pasos de 25 frames el KLT pierde el seguimiento en los paneos rápidos.")
         v_n = v2.slider("Número de pasos", 5, 100, 30, key="kv_n")
-        v_ref = v3.checkbox("Corregir con las líneas del campo en cada paso", value=True, key="kv_ref")
+        v_ref = v3.checkbox("Corregir con las líneas del campo en cada paso", value=False, key="kv_ref",
+                           help="Medido contra etiquetas a mano: empeora la mitad de los tramos de 50 frames; el KLT solo suele ir mejor.")
         v_fps = v4.slider("Velocidad (imágenes por segundo)", 1, 15, 5, key="kv_fps")
         H_play = H if H is not None else semilla
         if H_play is None:
