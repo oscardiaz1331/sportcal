@@ -1,6 +1,0 @@
-path: REPO_ROOT/datasets/hockeyrink
-train: images/train
-val: images/val
-kpt_shape: [56, 3]
-names:
-  0: rink

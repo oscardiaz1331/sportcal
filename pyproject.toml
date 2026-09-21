@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sportcal"
+version = "0.1.0"
+description = "Sport-field camera calibration (homography) from broadcast video: per-sport labs plus a deployable product pipeline."
+requires-python = ">=3.10"
+# opencv-CONTRIB on purpose: cv2.ximgproc (findEllipses, EdgeDrawing) needs it, and installing plain
+# opencv-python next to it overwrites cv2.pyd with a build that has no ximgproc.
+dependencies = ["numpy", "opencv-contrib-python", "scipy"]
+
+[project.optional-dependencies]
+# models and training (GPU): pin the exact versions in requirements.txt
+train = ["torch", "torchvision", "ultralytics", "supervision"]
+# interactive labs / labelling apps
+lab = ["streamlit", "streamlit-image-coordinates", "matplotlib"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["sportcal*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `slow` = CPU-only but > ~5 s (golden solver run, headless Streamlit drives). Opt in with: pytest -m ""
+addopts = "-m \"not slow\""
+markers = ["slow: takes more than ~5 s (solver golden run, headless app drives); run everything with -m \"\""]

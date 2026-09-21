@@ -1,5 +1,3 @@
-# TEMPORARY copy of configs/hockey/hockeyrink_pose_rp.yaml. Run runs/hockeyrink/yolo26m-18 started before the
-# restructure and its args.yaml points here (needed by `resume`). Delete once that run is finished.
 # GENERADO por training/relabel_reproject.py -- no editar a mano.
 # Mismas imagenes que hockeyrink_pose.yaml, con los keypoints densificados
 # reproyectando el template del rink por la homografia de cada frame.

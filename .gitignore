@@ -18,3 +18,7 @@ nhl_annotations_*.csv
 rink_preds_*.json
 tracking_log.csv
 scratch_idx.pkl
+
+# packaging
+*.egg-info/
+.pytest_cache/
