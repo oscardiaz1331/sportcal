@@ -137,3 +137,74 @@ def test_ellipse_fixed_center_recovers_a_ptz_pose_with_no_mask_and_no_clicks():
     wrong = solver.search_ellipse_fixed_center(center + [2.0, 0.0, 0.0], ell, top=1)
     d_wrong = reprojection_error(wrong[0]["H"], H_true, W, H_IMG) * K1920 if wrong else float("inf")
     assert d_wrong > 5.0 * (reprojection_error(best[0]["H"], H_true, W, H_IMG) * K1920)
+
+
+def _dibuja_distorted(pose, k1, k2, rng, w=W, h=H_IMG):
+    """Like evaluation.dibuja, but rendered with project_distorted (radial distortion) instead of an H:
+    a clean synthetic mask, no dirt, for testing FieldSolver.refine_distorted."""
+    import cv2
+    from sportcal.core.camera import project_distorted
+    from sportcal.sports.soccer import field as TPL
+    m = np.zeros((h, w), np.uint8)
+    for pl in TPL.polylines().values():
+        d = np.r_[0, np.cumsum(np.hypot(*np.diff(pl, axis=0).T))]
+        s = np.arange(0, d[-1], 0.1)
+        p = np.stack([np.interp(s, d, pl[:, 0]), np.interp(s, d, pl[:, 1])], 1)
+        xy, den = project_distorted(pose, k1, k2, p, w, h)
+        xy, den = xy[0], den[0]
+        ok = (den > 1e-3) & np.isfinite(xy).all(1) & (np.abs(xy) < 5 * w).all(1)
+        for run in np.split(np.arange(len(p)), np.where(~ok)[0]):
+            run = run[ok[run]]
+            if len(run) > 1:
+                cv2.polylines(m, [np.round(xy[run]).astype(np.int32)], False, 1, 2)
+    return m
+
+
+def _template_error(pose_a, k1_a, k2_a, pose_b, k1_b, k2_b, w=W, h=H_IMG):
+    """Median px distance between two distorted projections of a pitch-wide grid, on points the second one sees."""
+    from sportcal.core.camera import project_distorted
+    grid = np.array([[x, y] for x in np.linspace(-45, 45, 13) for y in np.linspace(-28, 28, 9)], float)
+    a, da = project_distorted(pose_a, k1_a, k2_a, grid, w, h)
+    b, db = project_distorted(pose_b, k1_b, k2_b, grid, w, h)
+    a, b, da, db = a[0], b[0], da[0], db[0]
+    ok = (db > 0) & (da > 0) & (b[:, 0] > 0) & (b[:, 0] < w) & (b[:, 1] > 0) & (b[:, 1] < h)
+    return float(np.median(np.linalg.norm(a[ok] - b[ok], axis=1))) if ok.sum() >= 8 else float("nan")
+
+
+@pytest.mark.slow
+def test_refine_distorted_recovers_a_known_distortion_from_an_undistorted_start():
+    """docs/plans/lens-distortion.md step 3: seed from the (wrong, undistorted) pose that already solves the
+    clean field lines, refine pose + k1 jointly, and check the fit gets much closer to the true (distorted)
+    field than the undistorted start -- NOT that k1 itself is recovered precisely: k1 trades off against
+    pan/tilt/position over the radius range one field of view covers, so from a single frame the exact value is
+    only loosely determined even though the resulting projection is accurate (measured on several synthetic
+    scenes; a tight tolerance on k1 alone made this test flaky across seeds)."""
+    from sportcal.core.camera import decompose_H
+    rng = np.random.default_rng(6)
+    pose_true, H_true = pose_aleatoria(rng)
+    k1_true = 0.2
+    mask = _dibuja_distorted(pose_true, k1_true, 0.0, rng)
+    solver = FieldSolver(mask)
+    start = solver.search_lines()
+    assert start and start[0]["score"] > 0.6            # the undistorted solver still finds a usable rough fit
+    d = decompose_H(start[0]["H"], W, H_IMG)
+    pose0 = np.array([d["C"][0], d["C"][1], d["C"][2], d["pan"], d["tilt"], d["f"]])
+    e_before = _template_error(pose0, 0.0, 0.0, pose_true, k1_true, 0.0)
+    pose, k1, k2, score = solver.refine_distorted(pose0)
+    e_after = _template_error(pose, k1, k2, pose_true, k1_true, 0.0)
+    assert e_after < 0.7 * e_before and e_after < 5.0
+    assert 0.05 < k1 < 0.45 and k2 == 0.0                # right order of magnitude and sign; k2 left untouched
+
+
+@pytest.mark.slow
+def test_refine_distorted_does_not_invent_distortion_on_a_clean_undistorted_mask():
+    rng = np.random.default_rng(5)
+    pose_true, H_true = pose_aleatoria(rng)
+    mask = dibuja(H_true, rng, 0)
+    solver = FieldSolver(mask)
+    start = solver.search_lines()
+    from sportcal.core.camera import decompose_H
+    d = decompose_H(start[0]["H"], W, H_IMG)
+    pose0 = np.array([d["C"][0], d["C"][1], d["C"][2], d["pan"], d["tilt"], d["f"]])
+    pose, k1, k2, score = solver.refine_distorted(pose0)
+    assert abs(k1) < 0.025 and abs(k2) < 0.01

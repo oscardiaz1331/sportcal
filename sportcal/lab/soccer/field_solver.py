@@ -24,7 +24,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from sportcal.core.camera import (
-    bilinear, is_pinhole_consistent, pinhole_residual, pose_to_H, project,
+    bilinear, is_pinhole_consistent, pinhole_residual, pose_to_H, project, project_distorted,
 )
 from sportcal.core.fitting import detect_lines
 from sportcal.sports.soccer.field import (
@@ -338,6 +338,68 @@ class FieldSolver:
             best = H_of(r.x)
             H0 = best
         return best, float(self.score(best[None], True)[0])
+
+    # -- lens distortion: docs/plans/lens-distortion.md --------------------------------
+    def score_distorted(self, pose, k1, k2, fine=True, tau=None, radius_weight=False):
+        """Like `score`, but the template is projected with `project_distorted` (pose (6,) or (n, 6), k1/k2
+        scalar or (n,)) instead of a homography: there is no H once k1 or k2 is nonzero.
+
+        `radius_weight`: additionally weight each segment by the square of its distance to the image centre,
+        normalised so the corner is 1. Radial distortion grows with r^2, so a segment near the centre barely
+        moves whatever k1 is and carries almost no information about it; the plain length-weighted score (used
+        for everything else) lets the much more numerous near-centre segments swamp the few long, informative
+        ones near the edge, which made a joint pose+k1 fit converge on a different, non-reproducible k1 on
+        every frame (measured: docs/experiments/soccer.md). `refine_distorted` turns this on; nothing else does."""
+        pts, cont = (self.pts_fine, self.cont_fine) if fine else (self.pts_coarse, self.cont_coarse)
+        tau = self.tau if tau is None else tau
+        pose = np.atleast_2d(pose).astype(float)
+        xy, depth = project_distorted(pose, k1, k2, pts, self.w, self.h)
+        ok = ((depth > 1e-6) & (xy[..., 0] >= 0) & (xy[..., 0] <= self.w - 1)
+              & (xy[..., 1] >= 0) & (xy[..., 1] <= self.h - 1))
+        seg = ok[:, 1:] & ok[:, :-1] & cont[1:]
+        xy = np.where(ok[..., None], xy, 0.0)
+        length = np.hypot(xy[:, 1:, 0] - xy[:, :-1, 0], xy[:, 1:, 1] - xy[:, :-1, 1]) * seg
+        mid = 0.5 * (xy[:, 1:] + xy[:, :-1])
+        if radius_weight:
+            r2 = (mid[..., 0] - self.w / 2.0) ** 2 + (mid[..., 1] - self.h / 2.0) ** 2
+            r2_corner = (self.w / 2.0) ** 2 + (self.h / 2.0) ** 2
+            length = length * np.clip(r2 / r2_corner, 0.02, 1.0)   # a small floor: never fully ignore a segment
+        weight = 1.0 - np.minimum(bilinear(self.dist, mid) / tau, 1.0)
+        on_mask, visible = (length * weight).sum(1), length.sum(1)
+        return 2.0 * on_mask / (visible + self.mask_len)
+
+    def refine_distorted(self, pose0, k1_0=0.0, k2_0=0.0, fit_k2=False):
+        """Jointly refine a pose (6,) AND radial distortion against the line mask.
+
+        `fit_k2`: by default only k1 is free (7 parameters) and k2 stays at k2_0 (normally 0). k1 and k2 are
+        strongly collinear over the radius range one field of view covers (the quartic term only separates from
+        the quadratic one near the image edge), so fitting both from a single frame tends to converge on a
+        compensating pair rather than the true k1 -- measured on synthetic scenes, see
+        docs/plans/lens-distortion.md step 3. Same tau cascade as `refine`/`refine_ptz`. Seed `pose0` from an
+        already-solved, undistorted pose (e.g. `search_lines()[0]["H"]` decomposed): with real distortion in the
+        frame, an undistorted fit is already close in pan/tilt/position, so this converges from a good start
+        rather than a blind global search. Returns (pose (6,), k1, k2, score)."""
+        cx, cy, cz, pan, tilt, f = np.asarray(pose0, float)
+        free = [cx, cy, cz, pan, tilt, np.log(f), k1_0] + ([k2_0] if fit_k2 else [])
+        q0 = np.array(free)
+        direc = np.diag([0.3, 0.3, 0.3, 0.02, 0.02, 0.05, 0.01] + ([0.01] if fit_k2 else []))
+
+        def unpack(q):
+            return np.array([q[0], q[1], q[2], q[3], q[4], np.exp(q[5])]), q[6], (q[7] if fit_k2 else k2_0)
+
+        q = q0
+        for tau in (0.04 * self.w, 0.015 * self.w, 0.006 * self.w, self.tau):
+            fine = tau == self.tau
+
+            def neg_score(x, tau=tau, fine=fine):
+                pose, k1, k2 = unpack(x)
+                return -float(self.score_distorted(pose, k1, k2, fine, tau, radius_weight=True)[0])
+
+            r = minimize(neg_score, q, method="Powell",
+                        options={"xtol": 1e-4, "ftol": 1e-5, "maxfev": 800, "direc": direc})
+            q = r.x
+        pose, k1, k2 = unpack(q)
+        return pose, float(k1), float(k2), float(self.score_distorted(pose, k1, k2, True)[0])  # reported score: unweighted, comparable to everything else
 
     # -- generator 4: FIXED camera centre, only pan / tilt / zoom vary ---------------------
     def refine_ptz(self, center, pan, tilt, f):

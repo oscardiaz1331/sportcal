@@ -98,3 +98,30 @@ def decompose_H(H, w, h):
     forward = R[2, :]
     return {"f": f, "C": -R.T @ t, "pan": float(np.arctan2(forward[0], forward[1])), "tilt": float(np.arcsin(-forward[2])),
             "mismatch": float(mismatch[0])}
+
+def project_distorted(pose, k1, k2, world_pts, w, h):
+    """Like project(pose_to_H(pose), world_pts), but with radial distortion (k1, k2) applied in normalized
+    camera coordinates before K. k1, k2: scalar or (n,), one pair per pose. Returns (xy (n, m, 2), depth (n, m)),
+    same shape convention as project(). No H exists once k1 or k2 is nonzero, so this does not go through pose_to_H."""
+    pose = np.atleast_2d(pose).astype(float)
+    k1, k2 = np.atleast_1d(k1).astype(float), np.atleast_1d(k2).astype(float)   # accept a scalar or one per pose
+    cx, cy, cz, pan, tilt, f = pose.T
+    sp, cp, st, ct = np.sin(pan), np.cos(pan), np.sin(tilt), np.cos(tilt)
+    z = np.zeros_like(pan)
+    right = np.stack([cp, -sp, z], 1)
+    forward = np.stack([sp * ct, cp * ct, -st], 1)
+    down = np.stack([-st * sp, -st * cp, -ct], 1)
+    R = np.stack([right, down, forward], 1)  # (n, 3, 3): rows right, down, forward
+    C = np.stack([cx, cy, cz], 1)
+    t = -np.einsum("nij,nj->ni", R, C)
+    P = np.asarray(world_pts, float)                       # (m, 2) = [X, Y]; Z=0, so only r1, r2 matter, t added below
+    q = np.einsum("nij,mj->nmi", R[:, :, :2], P) + t[:, None]
+    x = q[..., 0] / q[..., 2]
+    y = q[..., 1] / q[..., 2]
+    r2 = x ** 2 + y ** 2
+    radial_distortion = 1 + k1[:, None] * r2 + k2[:, None] * r2 ** 2
+    x_distorted = x * radial_distortion
+    y_distorted = y * radial_distortion
+    u = f[:, None] * x_distorted + w / 2.0
+    v = f[:, None] * y_distorted + h / 2.0
+    return (np.stack([u, v], axis=-1), q[..., 2])  # (n, m, 2), (n, m)

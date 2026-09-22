@@ -74,3 +74,41 @@ def test_decompose_ignores_the_arbitrary_sign_of_a_homography_and_rejects_non_ca
     Hp = C.pose_to_H(POSE, W, H)[0]
     assert np.allclose(C.decompose_H(-3.0 * Hp, W, H)["C"], POSE[0, :3], atol=1e-6)
     assert C.decompose_H(np.array([[1.0, 3.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), W, H) is None
+
+
+def test_project_distorted_with_zero_distortion_matches_the_plain_pinhole():
+    """docs/plans/lens-distortion.md step 1's anchor: k1 = k2 = 0 must reproduce project(pose_to_H(...)) exactly."""
+    pts = np.array([[0.0, 0.0], [10.0, 5.0], [-20.0, 15.0], [30.0, -10.0]])
+    xy_d, depth_d = C.project_distorted(POSE, 0.0, 0.0, pts, W, H)
+    xy, depth = C.project(C.pose_to_H(POSE, W, H), pts)
+    assert np.allclose(xy_d, xy, atol=1e-9) and np.allclose(depth_d, depth, atol=1e-9)
+
+
+def test_project_distorted_accepts_a_scalar_or_one_k_per_pose():
+    poses = np.tile(POSE, (2, 1))
+    poses[1, 3] += 0.2
+    xy_scalar, _ = C.project_distorted(poses, 0.01, 0.0, np.array([[0.0, 0.0]]), W, H)
+    xy_array, _ = C.project_distorted(poses, np.array([0.01, 0.01]), np.array([0.0, 0.0]), np.array([[0.0, 0.0]]), W, H)
+    assert np.allclose(xy_scalar, xy_array)
+
+
+def test_a_nonzero_k1_bends_collinear_world_points_off_a_straight_line():
+    """A world-straight line must stay straight through project() (pure pinhole) and bend under distortion,
+    growing with |k1| -- the sanity check of docs/plans/lens-distortion.md step 1."""
+    line_pts = np.c_[np.linspace(-40.0, 40.0, 9), np.full(9, 5.0)]  # a straight line in the world
+
+    def bend(xy):
+        # perpendicular deviation (px) of the projected points from the best-fit line through them
+        d = xy[-1] - xy[0]
+        d = d / np.linalg.norm(d)
+        n = np.array([-d[1], d[0]])
+        return np.abs((xy - xy[0]) @ n).max()
+
+    xy0, _ = C.project_distorted(POSE, 0.0, 0.0, line_pts, W, H)
+    assert bend(xy0[0]) < 1e-6                                      # undistorted: exactly straight
+    bends = []
+    for k1 in (0.05, 0.15, 0.3):
+        xy, _ = C.project_distorted(POSE, k1, 0.0, line_pts, W, H)
+        bends.append(bend(xy[0]))
+    assert bends[0] > 1.0                                            # already visibly curved
+    assert bends[1] > bends[0] and bends[2] > bends[1]                # grows with |k1|

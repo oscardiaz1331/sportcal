@@ -389,3 +389,33 @@ from the wide end), a small real displacement of the camera between shots (crane
 Distinguishing them needs either a distortion term in `core/camera.py` fitted jointly with pose, or more calibration votes bucketed
 by zoom level to see if the fixed-centre assumption holds better within a zoom range than across it. Not attempted yet.
 
+## 15. Lens distortion: real and measurable, but not yet usable as a correction (2026-09-22)
+
+Investigating section 14's open question (`docs/plans/lens-distortion.md` has the step-by-step account).
+`core/camera.py::project_distorted` adds radial distortion (k1, k2) to the pinhole model.
+
+**A straightness diagnostic finds real distortion.** On the longest detected line of a wide frame, the perpendicular
+deviation from a straight chord ("bow") drops sharply and with a clean, two-sided minimum when the points are
+undistorted with the right k1: f2200 (line 924 px, f/w 1.44) 5.25 -> 1.24 px at k1~0.25; f2250 (906 px, f/w 1.43)
+3.73 -> 0.92 px at k1~0.175; f1000 (645 px, f/w 1.84) 2.03 -> 1.38 px at k1~0.175. f900 and f950 show no clear
+minimum in the same range -- their longest usable line is shorter (578, 499 px) and likely closer to the image
+centre, where radial distortion (grows with r^2) barely moves anything. This is not an artefact: it needs a line
+that reaches far from the image centre to be visible at all.
+
+**A joint pose+k1 fit against the full mask does not give a trustworthy per-frame k1.** `FieldSolver.refine_distorted`
+(seeded from the undistorted `search_lines` solution, k1 only -- k1/k2 are collinear enough from one frame that
+fitting both converges on a compensating pair, not the true k1) reliably improves the fit-quality score, but the k1
+value it lands on varies wildly across real frames (0.00 to 0.48, no relation to zoom) and does not reproduce the
+diagnostic's own k1~0.25 on f2200 when checked directly. Cause: the existing length-weighted Dice score lets the
+many short, near-centre segments (uninformative about distortion, section above) outvote the few long, informative
+ones; weighting segments by their squared distance to the image centre (`score_distorted(..., radius_weight=True)`)
+helped but did not fix it -- a small pose error and k1 trade off against each other when both are free, and the
+optimiser cannot tell them apart from a single frame's mask alone.
+
+**Not yet done, and why:** a real fix means a plumb-line-style calibration -- fit one shared k1 (or one per zoom
+bucket) from the straightness of long lines across SEVERAL frames simultaneously, decoupled from any per-frame
+pose, then only apply it as a fixed correction (undistort points before `core/circle.py`) and re-solve pose with k1
+held fixed, never jointly. That is more work than this session budgeted; `docs/plans/lens-distortion.md` has the
+concrete next steps. Do not read the per-frame k1 values above as calibrated numbers to use anywhere -- they are
+diagnostic only.
+
