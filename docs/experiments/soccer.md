@@ -361,8 +361,31 @@ back to the same weak spot the grid solver found; it now refines against the ell
 On the 6 real circle-only labelled frames it makes **no difference: 15-34 px, matching section 12's fixed-centre floor,
 whether the ellipse comes from the detector (EdgeDrawing / findEllipses, 21-86 px, occasionally worse than the free-position fit) or
 from clean hand clicks (15-34 px, near-identical to the earlier grid-search numbers frame by frame)**. Since even a hand-clicked,
-noise-free ellipse does not do better, the floor is not the solver or the detector: it is that **these frames are not a fixed-centre
-pinhole view of this centre** (section 12 already showed the label-implied centre drifting by 40 m between zoom regimes). A correct
-implementation of a good idea, blocked by the same modelling gap; do not re-propose "detect the ellipse better" for these frames without
-first addressing that gap (distortion, roll, or a centre that itself moves with zoom).
+noise-free ellipse does not do better, the floor is not the solver or the detector.
+
+To be clear about what that floor is: a broadcast camera panning/tilting/zooming to follow play is the normal, expected case and
+exactly the 3 free numbers the fixed-centre solver is built to recover per frame; it is not itself a problem. The open question was
+whether the recovered CENTRE (position, meant to stay constant) is trustworthy. Section 14 measures that directly: it isn't click
+noise, and the ~20 px floor is real signal, not an artefact of this solver or the ellipse detector.
+
+## 14. Is the 15-34 px floor click noise, or a real centre error? (2026-09-22)
+
+Synthetic check, true centre C0 = (-2.75, -68.2, 13.6) (the calibrated one), camera aimed at the circle so it is fully visible,
+1.5 px of Gaussian noise added to every clicked point (matches the click precision used elsewhere in the lab):
+
+* **Recovering the 3-D position from the noisy ellipse alone (free position, like `decompose_H` on a hand label) scatters 8-14 px
+  median, 18-26 px 90th percentile, at EVERY zoom level (wide to tele) — position along the viewing axis is weakly observable from a
+  single ellipse, matching the "ill-conditioned with few primitives" warning of section 3b. This is large enough that the ~40 m
+  spread among the real decomposed centres (section 12) is not on its own evidence of anything beyond ordinary click noise.**
+* **But with the centre correctly FIXED (not decomposed) and only pan/tilt/focal solved from the same noisy ellipse
+  (`search_ellipse_fixed_center`), the resulting homography error is only 1-4 px at every zoom level** (median 1.1-1.4 px, worst of 30
+  trials 4.5 px): the pan/tilt/focal fit is well-conditioned once the position ambiguity is removed by fixing it.
+
+That gap (1-4 px from noise alone at the true centre, vs 15-34 px measured on the real frames in section 13) means **the calibrated
+centre is measurably wrong for those particular frames, by a real amount** (roughly consistent with the 5-18 m the wide-regime
+frames' own decomposed centres differ from the calibrated one) -- not a symptom of click noise, the detector, or the solver.
+Plausible causes, not yet distinguished: lens distortion (unmodelled; broadcast zoom lenses are not distortion-free, especially away
+from the wide end), a small real displacement of the camera between shots (crane/cart, not a fixed tripod), or roll (assumed zero).
+Distinguishing them needs either a distortion term in `core/camera.py` fitted jointly with pose, or more calibration votes bucketed
+by zoom level to see if the fixed-centre assumption holds better within a zoom range than across it. Not attempted yet.
 
