@@ -119,3 +119,21 @@ def test_robust_centre_drops_a_wild_vote():
     votes = np.array([[-3.3, -67.9, 13.3], [-3.2, -68.0, 13.4], [-3.4, -67.8, 13.2], [30.3, -34.2, 5.6]])
     centre, spread, n = robust_centre(votes)
     assert n == 3 and np.allclose(centre, [-3.3, -67.9, 13.3], atol=0.11) and (spread < 0.3).all()
+
+
+@pytest.mark.slow
+def test_ellipse_fixed_center_recovers_a_ptz_pose_with_no_mask_and_no_clicks():
+    from sportcal.core.camera import decompose_H, pose_to_H
+    from sportcal.sports.soccer.field import CIRCLE_RADIUS
+    center = np.array([-3.0, -68.0, 13.5])
+    pose = np.r_[center, np.radians(-14.0), np.radians(11.0), 1.9 * W]
+    H_true = pose_to_H(pose[None], W, H_IMG)[0]
+    ang = np.linspace(0, 2 * np.pi, 16, endpoint=False) + 0.2
+    ell = project(H_true[None], np.c_[CIRCLE_RADIUS * np.cos(ang), CIRCLE_RADIUS * np.sin(ang)])[0][0]
+    solver = FieldSolver(np.zeros((H_IMG, W), np.uint8))    # empty mask: only the ellipse decides
+    best = solver.search_ellipse_fixed_center(center, ell, top=1)
+    assert best and reprojection_error(best[0]["H"], H_true, W, H_IMG) * K1920 < 1.0
+    # a 2-metre-off centre must fit visibly worse (checks the ellipse actually constrains the centre, not just pan/tilt/f)
+    wrong = solver.search_ellipse_fixed_center(center + [2.0, 0.0, 0.0], ell, top=1)
+    d_wrong = reprojection_error(wrong[0]["H"], H_true, W, H_IMG) * K1920 if wrong else float("inf")
+    assert d_wrong > 5.0 * (reprojection_error(best[0]["H"], H_true, W, H_IMG) * K1920)

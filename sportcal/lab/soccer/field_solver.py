@@ -206,6 +206,58 @@ class FieldSolver:
         Hs = np.array(Hs)
         return self._best_distinct(Hs, self.score(Hs, tau=0.04 * self.w), top)
 
+    def search_ellipse_fixed_center(self, center, e_pts, top=4, n_starts=24, seed=0, n_pts=60):
+        """Like `search_ellipse`, but with the camera CENTRE known: only pan / tilt / focal are free (3
+        unknowns against the ellipse's 5 constraints, so it is over-determined and needs no mask and no
+        point clicks at all). Returns like `search_lines` / `search_pose`."""
+        from scipy.optimize import least_squares
+        rng = np.random.default_rng(seed)
+        c = np.asarray(center, float)
+        E = np.asarray(e_pts, float)
+        if len(E) < 5:
+            return []
+        E = E[rng.choice(len(E), min(n_pts, len(E)), replace=False)]
+        X = np.c_[E, np.ones(len(E))]
+        lo = np.array([-np.pi, np.radians(2), 0.4 * self.w])
+        hi = np.array([np.pi, np.radians(65), 9.0 * self.w])
+        Hs, ptf = [], []
+        for cx, cy in CIRCLE_CENTERS:
+            Cw = _circle_conic(cx, cy)
+
+            def resid(q):
+                H = pose_to_H(np.r_[c, q[0], q[1], q[2]][None], self.w, self.h)[0]
+                try:
+                    Hi = np.linalg.inv(H)
+                except np.linalg.LinAlgError:
+                    return np.full(len(E), 1e3)
+                Ci = Hi.T @ Cw @ Hi
+                CX = X @ Ci
+                g = np.maximum(2.0 * np.hypot(CX[:, 0], CX[:, 1]), 1e-9)
+                return np.clip(np.einsum("ni,ni->n", CX, X) / g, -300, 300)
+
+            for _ in range(n_starts):
+                x0 = np.array([rng.uniform(-np.pi, np.pi), rng.uniform(np.radians(8), np.radians(45)),
+                               self.w * np.exp(rng.uniform(np.log(0.6), np.log(4.0)))])
+                try:
+                    r = least_squares(resid, x0, bounds=(lo, hi), max_nfev=60, xtol=1e-7, ftol=1e-7)
+                except Exception:
+                    continue
+                if np.sqrt(np.mean(r.fun ** 2)) < 3.0:
+                    Hs.append(pose_to_H(np.r_[c, r.x][None], self.w, self.h)[0])
+                    ptf.append(r.x)
+        if not Hs:
+            return []
+        Hs = np.array(Hs)
+        # anchor ranking AND refinement to the ellipse itself: on a close-up the line mask is thin or empty and
+        # would otherwise drag the fit back towards whatever little it sees (see docs/experiments/soccer.md 13)
+        saved = (self.ellipse_pts, self.w_ellipse)
+        self.set_evidence(E, self.corner_pts, w_ellipse=max(1.5, self.w_ellipse), w_corner=self.w_corner)
+        try:
+            return self._best_distinct(Hs, self.score(Hs, tau=0.04 * self.w), top,
+                                       refiner=lambda i: self.refine_ptz(c, *ptf[i]))
+        finally:
+            self.ellipse_pts, self.w_ellipse = saved
+
     # -- corners as point correspondences ----------------------------------------------
     def snap_corners(self, H, Q, tol_px=None, min_match=4):
         """Re-fit H with detected corners Q (m, 2, working pixels): each visible template corner is paired

@@ -277,6 +277,8 @@ def sugiere(frame_bgr, modelo=None, det_elipse="auto", center=None):
     vias = [("intersecciones", campo.search_lines()), ("chamfer", campo.search_pose())]
     if E is not None:
         vias.append(("elipse", campo.search_ellipse(E)))
+        if center is not None:
+            vias.append(("elipse+centro fijo", campo.search_ellipse_fixed_center(center, E)))
     if center is not None:
         vias.append(("centro fijo", campo.search_fixed_center(center)))
     out = []

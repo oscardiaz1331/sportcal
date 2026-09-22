@@ -349,3 +349,20 @@ the label's frame; a label has a few px of noise of its own.
   suggested in section 11: it drifts onto the wrong line. It is now off by default. f2300 has a pinhole mismatch of 0.37 as a label, so the last pair may be a
   bad label rather than a bad chain.
 
+## 13. Ellipse alone, fixed centre: over-determined, but hits the same floor (2026-09-22)
+
+With the camera centre known, the ellipse's 5 constraints leave only 3 unknowns (pan, tilt, focal): over-determined, so in
+principle the circle outline alone should fix the pose, no mask and no point clicks needed (`FieldSolver.search_ellipse_fixed_center`,
+wired into `sugiere` as the "elipse+centro fijo" candidate whenever an ellipse is detected and a centre is calibrated). Checked
+synthetically (`tests/test_soccer_solver.py`): exact (< 1 px) from a clean ellipse, and a 2 m wrong centre already fits >= 5x worse,
+so the idea itself is sound. The first version refined the pose against the (thin, often near-empty) line mask, which just pulled it
+back to the same weak spot the grid solver found; it now refines against the ellipse itself.
+
+On the 6 real circle-only labelled frames it makes **no difference: 15-34 px, matching section 12's fixed-centre floor,
+whether the ellipse comes from the detector (EdgeDrawing / findEllipses, 21-86 px, occasionally worse than the free-position fit) or
+from clean hand clicks (15-34 px, near-identical to the earlier grid-search numbers frame by frame)**. Since even a hand-clicked,
+noise-free ellipse does not do better, the floor is not the solver or the detector: it is that **these frames are not a fixed-centre
+pinhole view of this centre** (section 12 already showed the label-implied centre drifting by 40 m between zoom regimes). A correct
+implementation of a good idea, blocked by the same modelling gap; do not re-propose "detect the ellipse better" for these frames without
+first addressing that gap (distortion, roll, or a centre that itself moves with zoom).
+
