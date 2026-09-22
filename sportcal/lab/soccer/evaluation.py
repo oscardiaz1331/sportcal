@@ -13,10 +13,28 @@ import cv2
 import numpy as np
 
 from sportcal.core import camera as CAM
+from sportcal.core import surface as SUR
 from sportcal.lab.soccer import field_solver as SF
 from sportcal.sports.soccer import field as TPL
 
 W, H_IMG = 960, 540   # tamaño de trabajo
+
+# Umbrales de calidad_toma: con margen respecto al hueco medido entre planos generales y primeros
+# planos/graficos/repeticiones (docs/experiments/soccer.md); un solo umbral (p.ej. solo cobertura) no basta,
+# un primer plano con jugador puede tener cobertura de cesped parecida a un plano general.
+COBERTURA_MIN = 0.45
+CENTRAL_MIN = 0.65
+
+
+def calidad_toma(img, w_trab=W, chi2=10.17):
+    """Cobertura, fraccion central y solidez del cesped de este frame (core.surface.wide_shot_score), mas si
+    parece un plano general del campo o no (primer plano, grafico de la emision, repeticion...)."""
+    h0, w0 = img.shape[:2]
+    im = cv2.resize(img, (w_trab, int(round(h0 * w_trab / w0))), interpolation=cv2.INTER_AREA)
+    surf = SUR.robust_surface(im, chi2=chi2, surface="grass")
+    cobertura, central, solidez = SUR.wide_shot_score(surf)
+    return {"cobertura": cobertura, "central": central, "solidez": solidez,
+            "plano_general": cobertura >= COBERTURA_MIN and central >= CENTRAL_MIN}
 
 
 # ------------------------------------------------------------ mascara de un frame real

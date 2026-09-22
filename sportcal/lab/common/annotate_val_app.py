@@ -287,6 +287,12 @@ def dibuja_minimapa(pts, sel):
 
 
 st.subheader("{}   ·   frame {}/{}".format(cid, ss.pos + 1, len(ss.frames)))
+if deporte == "futbol":
+    tq = SEV.calidad_toma(fr)
+    if not tq["plano_general"]:
+        st.warning("Esto no parece un plano general del campo (cobertura de césped {:.0f}%, {:.0f}% en el centro del "
+                   "frame): puede ser un primer plano, una repetición o un gráfico de la emisión. No bloquea nada, "
+                   "es solo un aviso -- si es un primer plano, mejor Saltar.".format(100 * tq["cobertura"], 100 * tq["central"]))
 modo_elipse = False
 if deporte == "futbol":
     modo_elipse = st.radio("Qué clicas en el frame", ["Puntos de la plantilla (elige antes el punto en el minimapa)", "Contorno del círculo central (elipse)"],

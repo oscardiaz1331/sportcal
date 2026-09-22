@@ -217,6 +217,29 @@ def solidity(mask):
     return float(np.count_nonzero(mask) / hull_area) if hull_area > 0 else 0.0
 
 
+def central_fraction(mask, box=0.4):
+    """Fraction of TRUE pixels inside a box of the given width/height (as a fraction of the frame) centred on
+    the frame. A close-up on a player or the ball empties the middle of the frame (the subject sits there
+    instead of the surface) even when the surface is still visible around it at similar overall coverage to a
+    normal wide shot; a shot of the surface itself keeps the centre covered almost everywhere. Cheap and, unlike
+    total coverage, not fooled by that case -- see docs/experiments/soccer.md."""
+    h, w = mask.shape
+    y0, y1 = int((0.5 - box / 2.0) * h), int((0.5 + box / 2.0) * h)
+    x0, x1 = int((0.5 - box / 2.0) * w), int((0.5 + box / 2.0) * w)
+    return float((mask[y0:y1, x0:x1] > 0).mean())
+
+
+def wide_shot_score(surface_mask):
+    """(coverage, central_fraction, solidity) of a SURFACE mask (not yet a play region): three independent signs
+    of whether this frame is a normal wide broadcast shot of the whole surface, rather than a close-up, replay or
+    graphic. No single one is reliable alone: a close-up can keep coverage similar to a wide shot (surface still
+    visible around the subject) but empties the centre; a shot with the surface almost entirely occluded can
+    still measure as "solid" by accident once play_region closes what little surface is left. Compare all three,
+    with margin, rather than trusting one threshold -- see docs/experiments/soccer.md for the measured gap
+    between wide shots and close-ups/graphics on real broadcast frames."""
+    return float((surface_mask > 0).mean()), central_fraction(surface_mask), solidity(play_region(surface_mask))
+
+
 def best_region(img, surface="ice"):
     """Play region from the fixed threshold AND the GMM, keeping the more solid one.
 

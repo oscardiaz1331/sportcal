@@ -60,6 +60,37 @@ def test_solidity_flags_a_broken_region():
     assert S.solidity(solid) > 0.99 and S.solidity(notched) < 0.9
 
 
+def test_central_fraction_of_a_full_mask_is_one_and_of_an_empty_one_is_zero():
+    h, w = 200, 300
+    assert S.central_fraction(np.ones((h, w), np.uint8)) == 1.0
+    assert S.central_fraction(np.zeros((h, w), np.uint8)) == 0.0
+
+
+def test_central_fraction_sees_a_hole_in_the_middle_even_at_the_same_total_coverage():
+    """The close-up case: surface present all around a central subject, at coverage similar to a wide shot, but
+    empty right in the middle -- total coverage alone cannot tell the two apart, central_fraction can."""
+    h, w = 300, 400
+    wide = np.ones((h, w), np.uint8)
+    wide[:60] = 0                                    # the stands band along the top: still ~80% coverage
+    close_up = np.ones((h, w), np.uint8)
+    close_up[80:260, 120:280] = 0                     # a big central subject, tuned to about the same coverage
+    assert abs(wide.mean() - close_up.mean()) < 0.05   # same ballpark of total coverage...
+    assert S.central_fraction(wide) > 0.9 and S.central_fraction(close_up) < 0.1   # ...but very different centres
+
+
+def test_wide_shot_score_separates_a_surface_shot_from_a_close_up():
+    h, w = 300, 400
+    surf_wide = np.ones((h, w), np.uint8)
+    surf_wide[:60] = 0
+    region_wide = S.play_region(surf_wide)
+    surf_close = np.ones((h, w), np.uint8)
+    surf_close[70:260, 110:290] = 0                   # large central subject: breaks solidity of what remains too
+    cov_w, cen_w, sol_w = S.wide_shot_score(surf_wide)
+    cov_c, cen_c, sol_c = S.wide_shot_score(surf_close)
+    assert cen_w > 0.85 and cen_c < 0.2
+    assert sol_w > 0.95 and sol_c < sol_w
+
+
 def test_integrate_and_normals():
     R = np.zeros((100, 100), np.float32)
     R[50, :] = 1.0

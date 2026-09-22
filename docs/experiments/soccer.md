@@ -209,7 +209,7 @@ overwrites `cv2.pyd` with a build without ximgproc (happened on 2026-09-20 20:51
 
 1. No validation set: the first hand-labelled soccer frames (`annotate_val_app`) are the prerequisite for any number that is
    more than an anecdote.
-2. A per-frame "wide field shot?" filter (close-ups poison the mask).
+2. ~~A per-frame "wide field shot?" filter~~ done, section 17.
 3. Comparable scores across generators (evidence terms make them incomparable).
 4. Which circle is the centre circle (ellipse centre on the halfway line).
 5. Whether the hockey segmentation route (train a line-segmentation U-Net on reprojected masks, then DLT) is worth repeating
@@ -447,4 +447,34 @@ distortion. Next, if this is picked up again: revisit the centre calibration its
 similar in framing/time to the circle-only ones, or the zoom-bucketed centre idea considered and shelved earlier
 this session) rather than more distortion work -- distortion has now been measured and ruled out as the cause of
 this specific symptom.
+
+## 17. A wide-shot filter: total coverage alone is not enough, the frame centre is (2026-09-22)
+
+`core/surface.py::wide_shot_score` / `central_fraction`; wired into the labelling app as an advisory caption
+(`evaluation.py::calidad_toma`, thresholds `COBERTURA_MIN=0.45`, `CENTRAL_MIN=0.65`).
+
+**First attempt used the wrong ground truth and found nothing.** `datasets/soccer_labels/skipped.json` (36 frames
+marked "Saltar") looked like a free negative set, but grass coverage, solidity and centre fraction came out
+statistically identical to the labelled (good) frames -- no separation at all. Checking a sample of skipped frames
+by eye: 7 of 8 were completely normal wide shots the user had simply not gotten around to labelling, not bad takes;
+`skipped.json` does not mean "not a wide shot", so it cannot be used as ground truth for one. Real negatives had to
+be found by scanning the clip for candidates (lowest raw grass coverage every 15 frames) and confirming a handful
+by eye: extreme close-ups (f3735, f3750, f4365, f4980), medium action close-ups with the ball/players centred
+(f3990-f4140), and a broadcast graphic with no camera frame at all (f4290); two low-coverage candidates (f4845,
+f5220) turned out to be ordinary wide shots in poor light and were excluded from the negative set.
+
+**With the corrected ground truth (13+5 labelled frames vs. 10 confirmed bad ones), the separation is real and
+matches the "player fills the centre, grass still visible around the edges" case the coverage number alone
+would miss**: total grass coverage 57-72% (good) vs 14-40% (bad) -- already separates cleanly here, but the medium
+close-ups (f3990-f4140) are exactly the case that could someday land inside the "good" range by total coverage
+alone. Central-box grass fraction (middle 40% x 40% of the frame) is the more robust signal for that case: 88-96%
+(good) vs 2-60% (bad, and the one 60% outlier -- f4140, ball near the frame centre -- is still below every good
+frame's coverage). Solidity of the play region separates well too (0.98-1.00 vs 0.26-1.00) except when the frame
+is almost entirely occluded, where `play_region` can degenerate and read as artificially solid.
+
+**Caveat, found while checking soccer2:** `soccer2_000000` (a genuine wide shot) reads as a near-miss (central
+36%) because that broadcast's camera sits lower, so the crowd occupies much more of the upper frame and the
+pitch horizon sits below the frame's vertical centre -- the central-box heuristic implicitly assumes a camera
+elevation close to the one in `soccer`. The thresholds are calibrated on `soccer`; a different broadcast's camera
+angle may need its own.
 
