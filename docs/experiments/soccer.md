@@ -419,3 +419,32 @@ held fixed, never jointly. That is more work than this session budgeted; `docs/p
 concrete next steps. Do not read the per-frame k1 values above as calibrated numbers to use anywhere -- they are
 diagnostic only.
 
+## 16. A pooled, camera-filtered k1 -- real, but does not explain the circle-only floor (2026-09-22)
+
+Section 15's fix, implemented: `lab/soccer/lens_distortion.py` walks frames spread over the clip, keeps only
+those that plausibly come from the SAME fixed broadcast camera (`is_broadcast_frame`: line-solver score, pinhole
+mismatch, AND the decomposed centre within 8 m of the calibrated one -- a different physical camera, a replay,
+would rarely land there), takes each accepted frame's single longest line, and fits ONE k1 to all of them at once
+by least squares on line straightness alone -- no pose in the loop, unlike section 15's joint fit.
+
+`python -m sportcal.lab.soccer.lens_distortion --video soccer --n 60`: 10 of 60 frames accepted (f/w 1.46-2.28),
+**k1 = 0.171, rms bow 1.98 -> 1.42 px over the 10 pooled lines**. Consistent with section 15's single-frame
+estimates (0.17-0.25) and no longer just one frame's opinion.
+
+**Applied to the 6 circle-only labelled frames (undistort the clicked ellipse with this k1, native focal
+estimated from an uncorrected `search_ellipse_fixed_center` pass, then re-solve): no improvement** (15.4->15.5,
+20.7->20.7, 22.7->22.7, 21.8->20.5, 27.9->29.2, 33.6->33.6 px). Cause found directly: the clicked ellipse in 5 of
+these 6 frames sits at only 19-26% of the image's corner distance from the centre (only f2350 reaches 47%); since
+radial distortion grows with r^2, at 20% of the corner radius it is ~4% of its corner-strength, negligible for a
+k1 this size. **The circle is simply too close to the image centre in these frames for this distortion to move it
+enough to matter.**
+
+**Conclusion: the lens distortion in this clip is real, now calibrated (k1~0.17) with a defensible, camera-
+filtered, multi-frame method, and section 15's original question is answered -- but it does not explain section
+14's 15-34 px floor on circle-only frames.** That floor's cause is still open: most likely a genuine centre
+error specific to those frames/that part of the match (section 14's own estimate: consistent with 5-18 m), not
+distortion. Next, if this is picked up again: revisit the centre calibration itself (more votes from frames
+similar in framing/time to the circle-only ones, or the zoom-bucketed centre idea considered and shelved earlier
+this session) rather than more distortion work -- distortion has now been measured and ruled out as the cause of
+this specific symptom.
+

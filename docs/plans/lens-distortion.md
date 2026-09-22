@@ -1,8 +1,11 @@
 # Plan: modelar la distorsión de lente en la cámara de fútbol
 
-> **Estado (2026-09-22):** pasos 1 y 2 hechos, confiables, con test. Paso 3 (ajuste conjunto pose+k1) implementado
-> y con test, pero el k1 que devuelve por frame NO es fiable como calibración — ver la sección "Lo que se encontró
-> en los pasos 3-4" al final, con la recomendación de cómo seguir. Pasos 5 y 6 no hechos todavía.
+> **Estado (2026-09-22, cerrado):** pasos 1-4 hechos. La recomendación del final SÍ se implementó:
+> `lab/soccer/lens_distortion.py` calibra un k1 compartido (0,171) de varios frames de la cámara central, filtrando
+> por vídeo como se pidió. Aplicado a los 6 frames de solo círculo (paso 5): **no mejora nada** -- el círculo en
+> esos frames está demasiado cerca del centro de la imagen para que la distorsión le afecte. La pregunta original
+> (por qué el centro fijo falla en esos frames, sección 14) sigue abierta; no es distorsión. Ver
+> `docs/experiments/soccer.md` secciones 15-16 para los números y la recomendación de por dónde seguir.
 
 Guía de implementación para ti (el modelo grande te ayuda función a función cuando se complique). No es un ADR ni
 un resultado medido todavía — es un plan de trabajo. Cuando algo se mida de verdad, eso va a
@@ -147,22 +150,29 @@ paso 2.** La diferencia de fondo entre los dos métodos:
   hueco. La distorsión y el error de pose quedan mezclados y el ajuste conjunto no los separa de forma fiable
   frame a frame.
 
-**Recomendación para seguir (no implementada todavía):** no fiarse de un k1 por frame salido del ajuste conjunto.
-En vez de eso, una calibración tipo "plumb-line" de verdad:
-1. Sobre VARIOS frames anchos a la vez, extraer (como en el paso 2) las líneas MÁS LARGAS detectadas — sin pose,
-   sin plantilla — y medir su "bow" en función de k1, igual que el paso 2 ya hace por frame.
-2. Ajustar un k1 COMPARTIDO por todos esos frames (o por bucket de zoom) minimizando la suma de "bow" al cuadrado
-   de todas las líneas largas a la vez, con las k1 buscándose de forma independiente de cualquier pose — esto es
-   exactamente lo que ya funcionó en el paso 2, solo que combinando varios frames en vez de mirar cada uno suelto.
-3. Solo DESPUÉS de tener ese k1 (por zoom o único), aplicarlo como corrección fija (des-distorsionar los puntos
-   clicados/detectados con `cv2.undistortPoints` antes de pasarlos a `core/circle.py`) y recién ahí SÍ merece la
-   pena re-ajustar la pose con k1 ya fijo, no libre — eso evita la mezcla que rompió los pasos 3-4.
+**Recomendación (IMPLEMENTADA, `sportcal/lab/soccer/lens_distortion.py`):** no fiarse de un k1 por frame salido del
+ajuste conjunto. En vez de eso, una calibración tipo "plumb-line" de verdad, aprovechando que se trabaja sobre
+vídeo (no frames sueltos elegidos a mano) y filtrando primero por si el frame es de verdad la cámara central de
+broadcast:
 
-Esto es más trabajo que lo que quedaba de plan original (pasos 5-6 asumían que el k1 por frame del paso 3 ya era
-fiable). Antes de construirlo, vale la pena parar y decidir si merece la pena frente a la vía barata de calibración
-por rango de zoom que se descartó al principio de esta sesión — con esta nueva evidencia (k1 real, ~0,17-0,25, pero
-solo detectable con líneas largas y lejos del centro) puede que ninguna de las dos por sí sola baste, y haga falta
-alguna combinación de las dos.
+1. `is_broadcast_frame`: recorre frames del vídeo y solo acepta los que puntúan bien con el solver de líneas sin
+   distorsión Y cuyo centro descompuesto cae a menos de 8 m del centro YA calibrado (`camera_center.py`) — un plano
+   de otra cámara (detrás de portería, banda, repetición) no debería decomponerse cerca de ese centro.
+2. `longest_line_points`: de cada frame aceptado, la línea detectada más larga (paso 2, sin pose, sin plantilla).
+3. `fit_shared_k1`: un k1 COMPARTIDO por todas las líneas de todos los frames aceptados a la vez, por mínimos
+   cuadrados sobre su "bow" — exactamente el paso 2, pero pooled, y sin ninguna pose de por medio.
+
+**Resultado real** (`python -m sportcal.lab.soccer.lens_distortion --video soccer --n 60`): 10 de 60 frames
+aceptados (f/w 1.46-2.28), **k1 = 0.171**, rms bow 1.98→1.42 px — coincide con las estimaciones sueltas del paso 2
+(0.17-0.25), ya no es la opinión de un solo frame.
+
+**Pero no resuelve la pregunta original.** Aplicado a los 6 frames de solo círculo (deshacer la distorsión de la
+elipse clicada con este k1 antes de `search_ellipse_fixed_center`): el error frente a tus etiquetas no cambia nada
+(15.4→15.5, 20.7→20.7, 22.7→22.7, 21.8→20.5, 27.9→29.2, 33.6→33.6 px). Causa encontrada: el círculo clicado en 5 de
+esos 6 frames está solo al 19-26% de la distancia al centro-a-esquina de la imagen (solo f2350 llega al 47%); como
+la distorsión radial crece con el cuadrado de esa distancia, ahí vale ~4% de lo que vale en la esquina — no basta
+para mover nada con un k1 de este tamaño. **El suelo de 15-34 px de la sección 14 sigue sin explicación: no es
+distorsión.** Ver `docs/experiments/soccer.md` secciones 15-16.
 
 ---
 
