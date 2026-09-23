@@ -22,6 +22,64 @@ percentile over frames. Commands are `python -m sportcal.lab.hockey.<module>`.
 Never compare models on different val sets, and never trust a difference smaller than the
 sampling noise: with 10-25 curves per class one miss = ±8 pp.
 
+## 0b. Per-frame H index, per-video split, one label convention - `lab/hockey/build_h_index.py` (2026-09-23)
+
+**Question:** one label source for the keypoint + line model (every target is rendered from one H per frame plus the
+template), and a test set that no training or selection frame can leak into.
+
+**Method:** fit H to every YOLO label of `hockeyrink_nhl` (NHL template) and `hockeyrink` (SHL, IIHF template) with
+the relabel gate lowered from 8 to 6 visible points (the 6-7 point frames are the sparse views; +61 NHL / +51 IIHF
+frames), take the `valh` H from its `clicks.jsonl`, mirror every H into one convention (zone A on the image left,
+y = 0 boards above the y = W ones, so y = W is the camera side), and split by video with **nhl4, nhl10 and nhl9 held
+out**. Output: `datasets/hockey_h.jsonl`, one frame per line (`build_h_index` docstring has the fields).
+
+**Result:**
+
+| split | frames | videos |
+|---|---|---|
+| train | NHL 585 (282 auto_seg + 303 older labels) + IIHF 574 | clip, clip2, nhl3, nhl5, nhl7, nhl8 + SHL |
+| dev (checkpoint selection) | NHL 62 + IIHF 61 | same videos |
+| test (report here) | 53 hand-labelled | nhl4 15, nhl10 18, nhl9 20 |
+| test_leaky | 23 hand-labelled | nhl3, nhl5, nhl7, nhl8 |
+| excluded | 96 | the labelled frames of nhl4 and nhl10 |
+
+Left out: 18 NHL and 26 IIHF frames with fewer than 6 visible keypoints. Fit residual p50 0.64 px, p90 2.78 px (the
+labels are mostly reprojections, section 0).
+
+**Half of the auto-labelled frames are mirrored in y.** In the index convention, 163 of the 329 segmentation-DLT
+frames need a y mirror, spread inside every video (nhl5 39/76, nhl7 47/93, nhl8 55/113, nhl10 22/47), against 3 of
+414 older NHL labels, 2 of 635 SHL labels and 2 of 76 hand labels (both nhl4). The camera does not change side inside
+a video, so the DLT picks the y sign at random (the lo/hi faceoff classes are symmetric): in half of the frames merged
+for `yolo26m-18` (section 2b) every lo/hi keypoint had the other side's name and the referee crease was on the wrong
+side. The index mirrors them back; the YOLO label files are untouched. Checked by eye on nhl7 f345 (mirrored: the
+template's referee crease lands on the painted one), nhl7 f5 and nhl3 f2610.
+
+**Decision:** the index is the label source of the per-sport NHL model; train / dev / test as above. SHL frames have
+no video id, so the IIHF part keeps the dataset's own split.
+
+**Audit of the stored labels** (`audit_labels`, 2026-09-23): 40 frames (30 auto_seg, 10 older labels) sampled evenly in
+time per video by `audit_labels --sample` and hand-clicked by the owner in `datasets/hockeyrink_nhl_audit`, then
+compared with the H stored in the index. Two measures, px at 1920: *grid* = median over a 1 m rink grid inside the frame,
+*clicks* = median distance between the clicks and where the stored H puts the clicked points (direct, no
+extrapolation). The hand labels are self-consistent: median click residual 2.5 px (9 of 40 used only 4 clicks, an
+exact fit with no check).
+
+| stored labels | n | grid p50 / p90 | clicks p50 / p90 | < 10 px at the clicks | > 50 px at the clicks |
+|---|---|---|---|---|---|
+| auto_seg (segmentation + DLT) | 30 | 17.2 / 24.5 | 21.6 / 51.6 | 0% | 4 |
+| older NHL labels (`nhl_prior`) | 10 | 15.6 / 50.8 | 10.8 / 33.0 | 40% | 1 |
+
+By eye (nhl5 f2540, nhl7 f1630, nhl8 f2270): the hand H sits on the painted lines; the auto H drifts in the half of
+the frame nearest the camera (the centre circle comes out too big towards the bottom), and nhl8 f2270 is simply wrong.
+
+**Consequence:** no NHL training label source is within the ~8 px target. The auto_seg frames are ~15-25 px off
+(besides the y mirror above) and the older labels ~11-16 px with occasional gross errors; the only NHL labels at
+~2-3 px are the hand ones (76 valh + 40 audit). The auto error is per frame and structured (the whole H is off, most in
+the near field), so it is not expected to average out the way independent click noise would - an expectation, not
+measured. Decision on what to train model A with: pending, owner's call.
+
+    python -m sportcal.lab.hockey.audit_labels
+
 ## 1. Template geometry (`sports/hockey/rink.py`)
 
 Two real bugs, both fixed and covered by `tests/test_sports.py`:

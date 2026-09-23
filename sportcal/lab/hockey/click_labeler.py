@@ -10,8 +10,12 @@ o lo/hi. Para que un frame nuevo respete la convencion de los datos de
 entrenamiento se aplica el espejo en x cuando la H sale con +x hacia la izquierda.
 El eje y NO se fuerza: en NHL los datos tienen las dos orientaciones (76/24) y
 faceoff lo/hi es inherentemente ambiguo.
+
+SPORTCAL_HOCKEY_LABELS=<carpeta en datasets/> etiqueta en otra carpeta; si esa carpeta tiene un
+queue.json ([[video, frame], ...]) se etiquetan esos frames en ese orden (sportcal/lab/hockey/audit_labels.py).
 """
 import json
+import os
 import re
 from pathlib import Path
 
@@ -25,7 +29,7 @@ from sportcal.lab.hockey import relabel_reproject as RP
 from sportcal.sports.hockey import rink
 from sportcal.core.labels import label_from_H  # noqa: E402
 
-OUT = ROOT / "datasets" / "hockeyrink_nhl_valh"
+OUT = ROOT / "datasets" / os.environ.get("SPORTCAL_HOCKEY_LABELS", "hockeyrink_nhl_valh")
 VIDEOS = ["nhl3", "nhl4", "nhl5", "nhl7", "nhl8", "nhl9", "nhl10"]     # sin nhl6 (pista amateur)
 GAP = 120
 
@@ -214,7 +218,12 @@ def marca_saltado(cid):
 def frames_candidatos(seed=0, paso_s=2.0):
     """[(video, frame)] en zonas a >=GAP frames de cualquier frame de train, sin
     filtrar por si el DLT resuelve (para que entren tambien los frames DIFICILES),
-    barajados con semilla fija; se excluyen los ya anotados/saltados."""
+    barajados con semilla fija; se excluyen los ya anotados/saltados. Si OUT tiene un queue.json,
+    son esos frames en ese orden."""
+    cola = OUT / "queue.json"
+    if cola.exists():
+        hecho = anotados() | saltados()
+        return [(v, i) for v, i in json.loads(cola.read_text()) if "{}_{:06d}".format(v, i) not in hecho]
     tr = {}
     for p in (ROOT / "datasets" / "hockeyrink_nhl" / "images" / "train").glob("*.jpg"):
         m = re.match(r"(.+?)_(\d+)$", p.stem)
@@ -244,6 +253,11 @@ def frames_candidatos(seed=0, paso_s=2.0):
 
 
 def lee_frame(v, i):
+    # un frame que ya tiene etiqueta se lee de SU imagen: reetiquetarlo (auditoria) tiene que cubrir exactamente los
+    # mismos pixeles, y saltar con CAP_PROP_POS_FRAMES no garantiza el frame exacto
+    for p in (ROOT / "datasets" / "hockeyrink_nhl" / "images").glob("*/{}_*.jpg".format(v)):
+        if int(p.stem.rsplit("_", 1)[1]) == i:
+            return cv2.imread(str(p))
     cap = cv2.VideoCapture(str(ROOT / (v + ".mp4")))
     cap.set(cv2.CAP_PROP_POS_FRAMES, i)
     ok, fr = cap.read()
