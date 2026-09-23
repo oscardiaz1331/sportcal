@@ -372,7 +372,7 @@ at once; check `nvidia-smi` before running `rink_metric` or the auto-labellers.
    hand-labelled frames (2 px, best labels that exist) as **train** for hard cases with a per-video split.
 4. Reject wrong-geometry frames (nhl6, nhl9 class of failure) automatically: nothing measured does it yet.
 
-## 14. Keypoint + line model for NHL ("model A") - `lab/hockey/train_kpline.py` (pipeline ready, not trained yet)
+## 14. Keypoint + line model for NHL ("model A") - `lab/hockey/train_kpline.py`
 
 **Question:** does a PnLCalib-style model - heatmaps for named keypoints and for the ends of the straight lines, then one
 DLT over points and lines - get closer to the ~8 px target than YOLO (section 2) and the segmentation DLT (section 6)?
@@ -400,5 +400,39 @@ DLT over points and lines - get closer to the ~8 px target than YOLO (section 2)
     python -m sportcal.lab.hockey.train_kpline --phase finetune --init runs/kpline/pretrain/best_h.pt
     python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune/best_h.pt --split test
 
-**Result:** pending. To compare with YOLO, evaluate YOLO on the same 63 test frames: the numbers of section 2 are on
-valh-76, a different set.
+**Result** (2026-09-23, batch 4 / workers 4 throughout, default CUDA path, no OOM at any point):
+
+| phase | epochs | wall time | batch |
+|---|---|---|---|
+| pretrain | 60 | ~82 min (~80 s/epoch) | 4 |
+| finetune | 30 | ~2 min (~4 s/epoch after the first, which pays the DataLoader worker start-up) | 4 |
+
+Checkpoint within each phase is the one with the lowest median H error on **dev** (stored labels, ~11-16 px off per
+the section 0b audit - a few px between checkpoints is noise, not signal). Reported below on the two held frame sets
+of section 0b:
+
+| model | split | n | coverage | p50 | p90 | < 10 px | < 25 px |
+|---|---|---|---|---|---|---|---|
+| pretrain `best_h.pt` | test | 63 | 62% | 9.7 px | 129.7 px | 33% | 49% |
+| pretrain `best_h.pt` | test_leaky | 23 | 100% | 18.3 px | 59.6 px | 26% | 61% |
+| finetune `best_h.pt` | test | 63 | 78% | 9.2 px | 639.2 px | 44% | 59% |
+| finetune `best_h.pt` | test_leaky | 23 | 100% | 6.4 px | 27.3 px | 65% | 87% |
+
+**Decision:** promising but not conclusive - needs more data before adoption. Fine-tuning helps on `test` (p50 9.7 →
+9.2 px, < 25 px 49% → 59%, coverage 62% → 78%), but coverage on `test` stays well short of full and the p90 explosion
+(639 px) shows some solves fail outright rather than land imprecisely. Not yet compared with YOLO (section 2) or the
+segmentation DLT (section 6) on this same 63-frame test set - both were measured on different val sets, so no
+same-set verdict against them exists yet. Next step before further investment: run YOLO on this `test` split and
+decide whether the coverage gap is a decoding threshold (the 0.3 peak cut in Setup) or a genuine model failure.
+
+**Caveats:**
+
+* `test_leaky` is not a held-out set: those 23 frames are the training-video hand labels also used for fine-tuning
+  (section 0b, "train + test_leaky, 48 frames" both enter the fine-tune data). Its near-full coverage and low p50
+  reflect near-train performance, not generalisation - only `test` (63 frames, nhl4/nhl9/nhl10, never trained on) is
+  the real number.
+* Checkpoint selection ran on noisy dev labels (~11-16 px off): several dev-epoch checkpoints in the 89-90% coverage
+  range are indistinguishable at that noise floor, so "the best epoch" within a phase is a soft pick, not a precise
+  one.
+* p90 on `test` swings hard between phases (129.7 px pretrain vs 639.2 px finetune) on only 63 frames - a couple of
+  outlier solves dominate it; treat single p90 figures as high-variance, unlike p50 and coverage.
