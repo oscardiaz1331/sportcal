@@ -37,7 +37,7 @@ def sample(rows, n_per_source=SAMPLE):
     for source, n in n_per_source.items():
         by_video = {}
         for r in rows:
-            if r["source"] == source and r["dataset"] == "hockeyrink_nhl":
+            if r.get("label_source", r["source"]) == source and r["dataset"] == "hockeyrink_nhl":
                 by_video.setdefault(r["video"], []).append(r["frame"])
         vids = sorted(by_video)
         picks = []
@@ -63,7 +63,9 @@ def evaluate(rows, hand):
     tpl = rink.build_template(p)
     mx = np.array([[-1.0, 0, p["length"]], [0, 1, 0], [0, 0, 1]])
     my = np.array([[1.0, 0, 0], [0, -1, p["width"]], [0, 0, 1]])
-    stored = {(r["video"], r["frame"]): r for r in rows if r["dataset"] == "hockeyrink_nhl"}
+    # once the audit labels are in the index, the label they replaced is kept as H_label / label_source
+    stored = {(r["video"], r["frame"]): dict(r, H=r.get("H_label", r["H"]), source=r.get("label_source", r["source"]))
+              for r in rows if r["dataset"] == "hockeyrink_nhl" and (r["source"] != "hand" or "H_label" in r)}
     out = []
     for (v, f), d in sorted(hand.items()):
         r = stored.get((v, f))

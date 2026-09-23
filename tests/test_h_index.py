@@ -12,10 +12,12 @@ def test_held_out_videos_never_reach_train_or_dev():
     for v in HOLDOUT_VIDEOS:
         for ds in ("hockeyrink_nhl", "hockeyrink"):
             for s in ("train", "val"):
-                assert split_of(ds, s, v) not in ("train", "dev"), (ds, s, v)
-        assert split_of(HAND, "val", v) == "test"
+                for hand in (False, True):
+                    assert split_of(ds, s, v, hand) not in ("train", "dev"), (ds, s, v, hand)
+        assert split_of(HAND, "val", v) == "test" and split_of("hockeyrink_nhl", "train", v, hand=True) == "test"
     assert split_of(HAND, "val", "nhl5") == "test_leaky"
     assert (split_of("hockeyrink_nhl", "train", "nhl5"), split_of("hockeyrink_nhl", "val", "nhl5")) == ("train", "dev")
+    assert split_of("hockeyrink_nhl", "train", "nhl5", hand=True) == "train"
 
 
 def test_every_mirrored_label_comes_back_to_one_convention():

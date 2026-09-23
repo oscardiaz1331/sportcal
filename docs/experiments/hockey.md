@@ -76,7 +76,13 @@ the frame nearest the camera (the centre circle comes out too big towards the bo
 (besides the y mirror above) and the older labels ~11-16 px with occasional gross errors; the only NHL labels at
 ~2-3 px are the hand ones (76 valh + 40 audit). The auto error is per frame and structured (the whole H is off, most in
 the near field), so it is not expected to average out the way independent click noise would - an expectation, not
-measured. Decision on what to train model A with: pending, owner's call.
+measured.
+
+**Decision (owner, 2026-09-23):** the 40 audit frames enter the index with their hand H (`source` hand, the label
+they replace kept as `H_label` / `label_source`): 25 train, 5 dev, and 10 from nhl10 / nhl4 that join the clean test
+set (now 63 frames). NHL train = 260 auto_seg + 300 older + 25 hand. Model A is trained in two phases: every train
+label for pretraining, then only the hand labels of training videos (train + test_leaky, 48 frames) for fine-tuning
+(section 14).
 
     python -m sportcal.lab.hockey.audit_labels
 

@@ -10,6 +10,8 @@ One JSON object per line: id ("<dataset>/<stem>"), image (relative to ROOT), dat
 video, None for SHL), template ("hockey-nhl" | "hockey-iihf"), source ("hand" | "auto_seg" | "nhl_prior" |
 "hockeyrink"), w, h, H (world metres -> image px, H[2,2] = 1), fit (None for hand labels, else {"inliers",
 "resid_px"} with the residual at 1920 px), split ("train" | "dev" | "test" | "test_leaky" | "excluded").
+A `hockeyrink_nhl` frame that was hand-clicked again (the audit, `audit_labels`) takes the hand H and keeps what it
+replaced: `label_source` and `H_label`.
 """
 import argparse
 import json
@@ -30,7 +32,8 @@ OUT = DATASETS / "hockey_h.jsonl"
 PARAMS = {"hockey-nhl": rink.RINK_NHL, "hockey-iihf": rink.RINK_IIHF}
 TEMPLATES = {k: rink.build_template(p) for k, p in PARAMS.items()}
 FITTED = (("hockeyrink_nhl", "hockey-nhl"), ("hockeyrink", "hockey-iihf"))
-HAND = "hockeyrink_nhl_valh"
+HAND = "hockeyrink_nhl_valh"             # new frames, hand-labelled
+RELABELLED = "hockeyrink_nhl_audit"      # hockeyrink_nhl frames hand-labelled again
 
 
 def canonicalize(H, p):
@@ -59,12 +62,12 @@ def video_of(stem):
     return (m.group(1), int(m.group(2))) if m else ("shl", None)
 
 
-def split_of(dataset, orig_split, video):
-    """Per-video split: a held-out video only ever lands in the test sets."""
+def split_of(dataset, orig_split, video, hand=False):
+    """Per-video split: a held-out video only ever lands in the test sets (a hand label from it is a test frame)."""
     if dataset == HAND:
         return "test" if video in HOLDOUT_VIDEOS else "test_leaky"
     if video in HOLDOUT_VIDEOS:
-        return "excluded"
+        return "test" if hand else "excluded"
     return "train" if orig_split == "train" else "dev"
 
 
@@ -73,18 +76,28 @@ def _size(img):
     return (im.shape[1], im.shape[0]) if im is not None else (None, None)
 
 
-def _row(dataset, stem, img, w, h, template, source, H, fit, orig_split):
+def _hand_labels(dataset):
+    """{(video, frame): H} from a click-labelled dataset; a re-saved frame keeps its last H."""
+    path = DATASETS / dataset / "clicks.jsonl"
+    if not path.exists():
+        return {}
+    return {video_of(d["id"]): np.asarray(d["H"], float) for d in map(json.loads, open(path, encoding="utf-8"))}
+
+
+def _row(dataset, stem, img, w, h, template, source, H, fit, orig_split, **extra):
     video, frame = video_of(stem)
     H, flips = canonicalize(np.asarray(H, float), PARAMS[template])
     return {"id": "{}/{}".format(dataset, stem), "image": img.relative_to(ROOT).as_posix(), "dataset": dataset,
             "video": video, "frame": frame, "template": template, "source": source, "w": w, "h": h,
-            "H": H.tolist(), "flips": flips, "fit": fit, "split": split_of(dataset, orig_split, video)}
+            "H": H.tolist(), "flips": flips, "fit": fit, "split": split_of(dataset, orig_split, video, source == "hand"),
+            **extra}
 
 
 def build():
     """(rows, Counter of why frames were left out)."""
     rows, dropped = [], Counter()
     auto = {p.stem for p in (DATASETS / "hockeyrink_auto_seg" / "images" / "train").glob("*.jpg")}
+    relabelled = _hand_labels(RELABELLED)
     for dataset, template in FITTED:
         tpl = TEMPLATES[template]
         for orig_split in ("train", "val"):
@@ -99,17 +112,20 @@ def build():
                 # label_from_H writes): 6-7 point frames are the sparse views (few markings in frame) the model most needs,
                 # and 6 points still leave 2 redundant ones for the residual check to mean something
                 fit, info = fit_from_label(rec[2], tpl, w, h, 6, 6.0, 8.0)
+                source = "hockeyrink" if dataset == "hockeyrink" else ("auto_seg" if lbl.stem in auto else "nhl_prior")
+                H_hand = relabelled.get(video_of(lbl.stem)) if dataset == "hockeyrink_nhl" else None
+                if H_hand is not None:
+                    old = {"H_label": canonicalize(fit[0], PARAMS[template])[0].tolist()} if fit else {}
+                    rows.append(_row(dataset, lbl.stem, img, w, h, template, "hand", H_hand, None, orig_split,
+                                     label_source=source, **old))
+                    continue
                 if fit is None:
                     dropped["{}: {}".format(dataset, info)] += 1
                     continue
-                source = "hockeyrink" if dataset == "hockeyrink" else ("auto_seg" if lbl.stem in auto else "nhl_prior")
                 rows.append(_row(dataset, lbl.stem, img, w, h, template, source, fit[0],
                                  {"inliers": len(fit[1]), "resid_px": round(float(info), 2)}, orig_split))
-    hand = {}
-    for line in open(DATASETS / HAND / "clicks.jsonl", encoding="utf-8"):
-        d = json.loads(line)
-        hand[d["id"]] = np.asarray(d["H"], float)          # a re-saved frame keeps its last H
-    for stem, H in sorted(hand.items()):
+    for (video, frame), H in sorted(_hand_labels(HAND).items()):
+        stem = "{}_{:06d}".format(video, frame)
         img = DATASETS / HAND / "images" / "val" / (stem + ".jpg")
         w, h = _size(img)
         if w is None:
