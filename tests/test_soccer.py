@@ -102,3 +102,19 @@ def test_ellipse_labelling_gestures_and_fit():
     assert np.abs(CI._project(Hn, P)[0] - CI._project(H, P)[0]).max() < 1.0
     assert LB.ajusta_elipse(world, CI._project(H, world)[0], ell[:3], w, h)[0] is None      # < 5 points on the outline
     assert LB.ajusta_elipse(world[:1], CI._project(H, world)[0][:1], ell, w, h)[0] is None   # < 2 clicked points
+
+
+def test_pnlcalib_camera_is_converted_to_our_world_convention():
+    """SoccerNet's y points towards the main camera, ours towards the far touchline: a reflection that
+    canonicalize_H cannot undo. A point off both axes must land where SoccerNet projects (X, -Y, 0)."""
+    from sportcal.lab.soccer.pnlcalib_eval import to_H
+    C = np.array([0.0, 60.0, -15.0])            # SoccerNet frame: near side, 15 m up (z points down)
+    f = -C / np.linalg.norm(C)                   # optical axis towards the centre spot
+    right = np.cross([0.0, 0.0, 1.0], f)
+    right /= np.linalg.norm(right)
+    R = np.stack([right, np.cross(f, right), f])  # camera x right, y down, z forward
+    P = np.array([[1500.0, 0, 960], [0, 1500, 540], [0, 0, 1]]) @ R @ np.c_[np.eye(3), -C]
+    X, Y = 20.0, 10.0                            # far-right quadrant, ours
+    q = P @ [X, -Y, 0.0, 1.0]
+    p = to_H(P) @ [X, Y, 1.0]
+    assert np.allclose(p[:2] / p[2], q[:2] / q[2], atol=1e-6)

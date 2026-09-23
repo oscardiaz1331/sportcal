@@ -478,3 +478,58 @@ pitch horizon sits below the frame's vertical centre -- the central-box heuristi
 elevation close to the one in `soccer`. The thresholds are calibrated on `soccer`; a different broadcast's camera
 angle may need its own.
 
+## 18. PnLCalib as-is on our hand labels - `lab/soccer/pnlcalib_run.py`, `lab/soccer/pnlcalib_eval.py` (2026-09-22)
+
+**Question:** how close does the public PnLCalib (SoccerNet-trained HRNet keypoint + line heatmaps, DLT on detected and
+derived keypoints, optional points-and-lines refinement) get to our hand labels with no training on our clips? It is the
+number any calibration we build ourselves has to beat.
+
+**Method:** release weights `SV_kp` / `SV_lines` (single view, SoccerNet, not fine-tuned), PnLCalib's inference defaults,
+on the 18 labelled frames of `datasets/soccer_labels/` (13 of `soccer`, 5 of `soccer2`), with and without the PnL
+refinement. Error = `core.geometry.geom_error`: median px (at 1920) over a 1 m pitch grid, on the points the label puts in
+frame (the measure of section 12). SoccerNet's world has y pointing TOWARDS the camera, ours away from it: `to_H` flips it
+(a reflection, not the 180-degree twin; `tests/test_soccer.py`, mutation-checked). CPU run, 2 cores: ~8-9 s per
+1920x1080 frame for both networks + solver; GPU time not measured.
+
+**Result** (px at 1920):
+
+| frame | base | + PnL refine | | frame | base | + PnL refine |
+|---|---|---|---|---|---|---|
+| soccer f850 | 13.3 | 14.1 | | soccer f2200 | 7.7 | 7.6 |
+| soccer f900 | 3.5 | 3.6 | | soccer f2250 | 11.8 | 13.2 |
+| soccer f950 | 5.6 | 16.6 | | soccer f2300 | 15.3 | 15.6 |
+| soccer f1000 | 12.9 | 15.9 | | soccer f2350 | 11.7 | 11.7 |
+| soccer f1500 | 4.1 | 4.1 | | soccer2 f0 | 15.3 | 21.2 |
+| soccer f1550 | 4.3 | 4.3 | | soccer2 f450 | 9.9 | 7.6 |
+| soccer f1600 | 3.3 | 3.3 | | soccer2 f1200 | 19.0 | 41.8 |
+| soccer f1650 | 6.6 | 6.6 | | soccer2 f1500 | 12.6 | 12.6 |
+| soccer f1700 | 10.7 | 10.7 | | soccer2 f3000 | 8.8 | 8.9 |
+
+| clip | variant | answered | p50 | p90 | < 10 px |
+|---|---|---|---|---|---|
+| soccer | base | 13/13 | 7.7 | 13.3 | 54% |
+| soccer | + refine | 13/13 | 10.7 | 15.8 | 46% |
+| soccer2 | base | 5/5 | 12.6 | 17.5 | 40% |
+| soccer2 | + refine | 5/5 | 12.6 | 33.6 | 40% |
+
+Against section 12 on the same labels: on the circle-only views (f1500, f1550, f1600, f1650, f1700, f2350) PnLCalib gives
+3.3-11.7 px, where the fixed-centre solver sat at 15-34 px and the line-intersection solver was 170-6800 px off. On the
+wide frames where the line solver worked (f900, f950, f2200, f2250: 8-11 px) it gives 3.5, 5.6, 7.7, 11.8 px. It answered
+on every frame (no close-ups in this set). Overlays checked by eye on f1600 (all three drawings on the painted lines),
+f950, soccer2 f0 and soccer2 f1200 (the refined arc visibly below the painted one).
+
+**Decision (proposed, owner's call):** the soccer reference to beat, and a source of anchors for labelling and for the KLT
+propagation of section 9. Base without refinement: the refinement is worse by > 2 px on 4 of 18 frames and better on 1.
+Not for the product as is: GPL-2.0, and not fine-tuned on our broadcasts. PnLCalib's own residual (`rep_err` 2.0-5.6) does
+not rank the real error (Spearman 0.20, n = 18): it is not a confidence gate, the same lesson as ADR 0002.
+
+**Caveats:** 18 frames from two clips; the labels carry a few px of their own noise (f2300's label has pinhole mismatch
+0.37, section 12), so differences under ~3-5 px are noise. The grid measure extrapolates over the whole visible pitch,
+including foreground without lines. Neither side models the lens distortion of section 16.
+
+**Reproduce:** in a separate environment, never the sportcal venv (PnLCalib pins `opencv-python`, section 7): clone
+github.com/mguti97/PnLCalib, `pip install torch torchvision opencv-python-headless pyyaml scipy shapely lsq-ellipse tqdm
+pillow matplotlib`, download `SV_kp` and `SV_lines` from its v1.0.0 release, then
+
+    <pnlcalib-python> sportcal/lab/soccer/pnlcalib_run.py --pnl-dir ../PnLCalib --weights-dir ../PnLCalib/weights --images datasets/soccer_labels/images --out runs/pnlcalib/soccer_labels_norefine.json --no-refine
+    python -m sportcal.lab.soccer.pnlcalib_eval --preds runs/pnlcalib/soccer_labels_norefine.json
