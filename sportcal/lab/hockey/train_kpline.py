@@ -6,6 +6,7 @@ IIHF, the stored NHL ones are 11-22 px off), then fine-tune on the hand labels o
     python -m sportcal.lab.hockey.train_kpline --phase pretrain
     python -m sportcal.lab.hockey.train_kpline --phase finetune --init runs/kpline/pretrain/best_h.pt
     python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune/best_h.pt --split test
+    python -m sportcal.lab.hockey.train_kpline --eval runs/hockeyrink/yolo26m-18/weights/best_homography.pt --yolo
 
 Targets are rendered from H every time, never stored: a flip or a camera turn (`core.camera.ptz_warp`) changes H,
 `canonicalize` renames the points, and no remapping table exists to go wrong. Checkpoints are chosen by the median
@@ -149,6 +150,21 @@ def evaluate(model, rows, device, batch=4):
     return np.array(errs)
 
 
+def evaluate_yolo(weights, rows, device):
+    """The same errors for the 56-keypoint YOLO model, through the product estimator (one frame at a time). Its H is
+    canonicalized first: YOLO was trained on labels with mixed mirror conventions (hockey.md section 0b), so the names
+    of its points are not a fair part of the comparison."""
+    from sportcal.product.hockey import YoloKeypointEstimator
+    est = YoloKeypointEstimator(weights, device=0 if device.type == "cuda" else "cpu")
+    errs = []
+    for r in rows:
+        e = est.estimate(cv2.imread(str(ROOT / r["image"])))
+        H = None if e is None else canonicalize(e.H, PARAMS[r["template"]])[0]
+        errs.append(np.inf if H is None else
+                    geom_error(H, np.asarray(r["H"], float), GRID[r["template"]], r["w"], r["h"]))
+    return np.array(errs)
+
+
 def summary(errs):
     ok = np.isfinite(errs)
     if not ok.any():
@@ -217,6 +233,7 @@ def main():
     ap.add_argument("--max-steps", type=int, default=0, help="steps per epoch, 0 = all (smoke tests)")
     ap.add_argument("--eval", help="weights to evaluate instead of training")
     ap.add_argument("--split", default="test", help="with --eval: test | test_leaky | dev")
+    ap.add_argument("--yolo", action="store_true", help="with --eval: the weights are a YOLO pose model (product path)")
     args = ap.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rows = [json.loads(line) for line in open(INDEX, encoding="utf-8")]
@@ -224,11 +241,16 @@ def main():
         train(args, rows, device)
         return
     rows = [r for r in rows if r["split"] == args.split and r["template"] == "hockey-nhl"]
-    model = HalfResUNet(ncls=NCH).to(device)
-    model.load_state_dict(torch.load(args.eval, map_location=device))
-    errs = evaluate(model, rows, device)
+    if args.yolo:
+        errs = evaluate_yolo(args.eval, rows, device)
+    else:
+        model = HalfResUNet(ncls=NCH).to(device)
+        model.load_state_dict(torch.load(args.eval, map_location=device))
+        errs = evaluate(model, rows, device)
     for r, e in zip(rows, errs):
         print("{:<40} {:>8.1f}".format(r["id"], e))
+    for v in sorted({r["video"] for r in rows}):
+        print("  {:<6} {}".format(v, summary(errs[[r["video"] == v for r in rows]])))
     print("{} ({} frames): {}".format(args.split, len(rows), summary(errs)))
 
 

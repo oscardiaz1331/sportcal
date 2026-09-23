@@ -436,3 +436,34 @@ decide whether the coverage gap is a decoding threshold (the 0.3 peak cut in Set
   one.
 * p90 on `test` swings hard between phases (129.7 px pretrain vs 639.2 px finetune) on only 63 frames - a couple of
   outlier solves dominate it; treat single p90 figures as high-variance, unlike p50 and coverage.
+
+**Same-set comparison with YOLO and failure analysis** (2026-09-23): both methods on the same 63 `test` frames, same
+measure (`geom_error`, 1 m grid, points the label puts in frame), one frame at a time
+(`train_kpline --eval <weights> [--yolo]`). YOLO's H is canonicalized first (its labels mixed mirror conventions,
+section 0b). The YOLO figures differ from section 2 because the set, the measure and the inference path all differ
+(section 2 is valh-76, keypoint reprojection error, batched inference - ADR 0003).
+
+| method | test (63): coverage / p50 / < 10 px / < 25 px | nhl10 (26) | nhl4 (17) | nhl9 (20, outdoor) |
+|---|---|---|---|---|
+| model A, finetune | 78% / 9.2 / 44% / 59% | 100% / **7.2** / 73% / 100% | 59% / 7.0 / 41% / 47% | 65% / 512 / 10% / 15% |
+| model A, pretrain | 62% / 9.9 / 32% / 49% | 100% / 10.2 / 50% / 85% | 47% / 8.3 / 41% / 47% | 25% / 154 / 0% / 5% |
+| YOLO `yolo26m-18` | 100% / 84.5 / 0% / 2% | 100% / 41.7 / 0% / 4% | 100% / 851 / 0% / 0% | 100% / 243 / 0% / 0% |
+| YOLO `yolo26m-17` | 90% / 204 / 0% / 0% | 96% / 135 / 0% / 0% | 76% / 1336 / 0% / 0% | 95% / 212 / 0% / 0% |
+
+On the two indoor held-out videos together (nhl4 + nhl10, 43 frames) the fine-tuned model answers 84% with p50 7.1 px,
+p90 17.2 px, 60% < 10 px, 79% < 25 px of all frames; `yolo26m-18` answers all with p50 50.6 px and 2% < 25 px.
+
+* **nhl9 is where it breaks:** the outdoor Stadium Series game, quarantined from training (section 7), with nothing
+  like it in the train set. 10 of the 12 answers over 50 px are nhl9 frames.
+* **Refusals are sparse views:** the 14 refused frames (7 nhl4, 7 nhl9) had 1-3 keypoints and 0-3 line ends above the
+  0.3 peak threshold. Lowering it buys coverage with accuracy: 0.3 -> 78% / 9.2 px, 0.2 -> 90% / 11.6 px, 0.1 ->
+  100% / 18.9 px (test, p50 of the answered frames). Keep 0.3.
+* **Candidate confidence gate (found on test, not validated):** every answer built from >= 7 keypoints above threshold
+  was within 18 px (34 frames, p50 6.9 px), and all 12 answers over 50 px came from <= 6 keypoints. Picked on the test
+  set itself, so it needs confirming on frames the choice never saw before it is used anywhere.
+
+**Decision (revised, proposed - owner's call):** model A replaces the "promising, not conclusive" reading above. It is
+the best NHL method measured: ~10x lower median than YOLO on the same frames, and on standard indoor broadcasts of
+videos it never saw it reaches the ~8 px target when it answers. Proposed for ADR 0003 as the first product stage with
+YOLO as fallback, once the keypoint-count gate is confirmed on independent frames. Open: outdoor / unusual rinks (need
+training frames of that kind) and sparse views (refused, not wrong).
