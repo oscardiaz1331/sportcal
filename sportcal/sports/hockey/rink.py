@@ -222,3 +222,17 @@ def minimap_base(p=RINK_NHL, scale=9, margin=12, bg=(245, 245, 245)):
 
     draw_rink(img, to_img, p, (150, 150, 150), 1)
     return img, to_img
+
+
+def straight_lines(p):
+    """[(name, a, b)]: the straight painted lines and board runs whose two visible ends a line model predicts, each
+    ordered from its low to its high coordinate so that the first and second end keep one meaning. The goal lines stop
+    where they meet the curved boards (keypoints 2/7 and 48/53), not at y = 0 / W."""
+    L, W, r = p["length"], p["width"], p["corner_r"]
+    g, bl = p["goal_line_from_end"], p["blue_from_end"]
+    yb = r - np.sqrt(max(r ** 2 - (r - g) ** 2, 0.0))
+    return [("boards y=0", (r, 0.0), (L - r, 0.0)), ("boards y=W", (r, W), (L - r, W)),
+            ("boards x=0", (0.0, r), (0.0, W - r)), ("boards x=L", (L, r), (L, W - r)),
+            ("goal line A", (g, yb), (g, W - yb)), ("goal line B", (L - g, yb), (L - g, W - yb)),
+            ("blue line A", (bl, 0.0), (bl, W)), ("blue line B", (L - bl, 0.0), (L - bl, W)),
+            ("centre line", (L / 2, 0.0), (L / 2, W))]

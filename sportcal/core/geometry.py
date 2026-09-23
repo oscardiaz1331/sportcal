@@ -250,3 +250,32 @@ def image_to_world(H, img_xy):
     below the horizon; the caller decides which detections to trust."""
     pts = np.asarray(img_xy, np.float64).reshape(-1, 1, 2)
     return cv2.perspectiveTransform(pts, np.linalg.inv(H)).reshape(-1, 2)
+
+
+def line_through(p, q):
+    """Homogeneous line (a, b, c) through two 2-D points."""
+    return np.cross([p[0], p[1], 1.0], [q[0], q[1], 1.0])
+
+
+def solve_points_lines(world_pts, img_pts, world_lines, img_lines, ref_world, ref_img, ransac_px):
+    """World -> image H from matched points and lines, or None. RANSAC over the points drops their outliers, then one
+    Hartley-normalised DLT takes the inlier points AND the lines (as lines - the dual DLT - never sampled into fake
+    points). The joint H replaces the points-only one unless it fits the inlier points clearly worse: a wrong line.
+    ponytail: lines are only vetoed as a group, never RANSAC'd one by one; per-line consensus is the upgrade."""
+    wp = np.asarray(world_pts, float).reshape(-1, 2)
+    ip = np.asarray(img_pts, float).reshape(-1, 2)
+    H_pts, inl = fit_homography_ransac(wp, ip, ransac_px)
+    if inl is not None:
+        wp, ip, H_pts = wp[inl], ip[inl], H_pts / H_pts[2, 2]
+    rows = [(*a, *b) for a, b in zip(wp, ip)]
+    lines = [(*a, *b) for a, b in zip(world_lines, img_lines)]
+    H_joint = None
+    if len(rows) + len(lines) >= 4:
+        H_joint = solve_dlt_correspondences(rows, lines, scale_transform(ref_world), scale_transform(ref_img))
+    if H_joint is None or H_pts is None:
+        return H_pts if H_joint is None else H_joint
+
+    def resid(H):
+        q = np.c_[wp, np.ones(len(wp))] @ H.T
+        return np.median(np.linalg.norm(q[:, :2] / q[:, 2:] - ip, axis=1))
+    return H_joint if resid(H_joint) <= resid(H_pts) + ransac_px / 2 else H_pts

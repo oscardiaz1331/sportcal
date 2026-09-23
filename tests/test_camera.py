@@ -112,3 +112,16 @@ def test_a_nonzero_k1_bends_collinear_world_points_off_a_straight_line():
         bends.append(bend(xy[0]))
     assert bends[0] > 1.0                                            # already visibly curved
     assert bends[1] > bends[0] and bends[2] > bends[1]                # grows with |k1|
+
+
+def test_ptz_warp_is_the_same_camera_turned_and_zoomed():
+    """Warping by G must give exactly the homography of the tilted / zoomed pose: what makes the augmentation exact."""
+    H0 = C.pose_to_H(POSE, W, H)[0]
+    for dtilt, zoom in ((np.radians(3), 1.0), (0.0, 1.25), (np.radians(-2), 0.9)):
+        G, H1 = C.ptz_warp(H0, W, H, tilt=dtilt, zoom=zoom)
+        p = POSE.copy()
+        p[0, 4] += dtilt
+        p[0, 5] *= zoom
+        want = C.pose_to_H(p, W, H)[0]
+        assert np.allclose(H1 / H1[2, 2], want / want[2, 2], rtol=1e-6, atol=1e-6), (dtilt, zoom)
+        assert np.allclose(G @ H0, H1)

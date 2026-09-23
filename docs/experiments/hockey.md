@@ -371,3 +371,34 @@ at once; check `nvidia-smi` before running `rink_metric` or the auto-labellers.
 3. A larger independent val: keep annotating `valh` (`sportcal/lab/common/annotate_val_app.py`) and consider using the
    hand-labelled frames (2 px, best labels that exist) as **train** for hard cases with a per-video split.
 4. Reject wrong-geometry frames (nhl6, nhl9 class of failure) automatically: nothing measured does it yet.
+
+## 14. Keypoint + line model for NHL ("model A") - `lab/hockey/train_kpline.py` (pipeline ready, not trained yet)
+
+**Question:** does a PnLCalib-style model - heatmaps for named keypoints and for the ends of the straight lines, then one
+DLT over points and lines - get closer to the ~8 px target than YOLO (section 2) and the segmentation DLT (section 6)?
+
+**Setup:**
+
+* Targets rendered on the fly from the index H (section 0b), never stored: the 56 template keypoints plus both visible
+  ends of 9 straight lines (4 board runs, 2 goal lines, 2 blue lines, the centre line: `rink.straight_lines`) = 74
+  channels, sub-pixel Gaussians of sigma 1.5 px at 480 (6 px at 1920).
+* U-Net / ResNet34 of section 5 (ImageNet encoder), 960x544 input, heatmaps at half resolution: full resolution ran out
+  of memory (6 GB at batch 2 on the CPU). CenterNet focal loss, final bias at p = 0.01.
+* Augmentation: a turn / zoom of the camera about its centre (`core.camera.ptz_warp`, exact: the label becomes G H), a
+  mirror (the index convention renames the points), brightness / contrast.
+* Decoding: the peak of each channel (>= 0.3), RANSAC over the points, then one DLT over the inlier points plus the lines
+  (`core.geometry.solve_points_lines`).
+* Two phases: pretrain on every train label (NHL + IIHF, 1159 frames), fine-tune on the 48 hand labels of training
+  videos. Checkpoints are chosen by the median H error on dev (stored labels, ~11-16 px off, so a few px between
+  checkpoints is noise) and the result is reported on the 63 clean test frames.
+* Floors measured without a network: reading perfect half-resolution heatmaps back costs ~1 px at 1920; perfect
+  targets through the whole decode + solver chain come back within 0.4-0.5 px (`tests/test_labels.py`, at 960).
+
+**Commands:**
+
+    python -m sportcal.lab.hockey.train_kpline --phase pretrain
+    python -m sportcal.lab.hockey.train_kpline --phase finetune --init runs/kpline/pretrain/best_h.pt
+    python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune/best_h.pt --split test
+
+**Result:** pending. To compare with YOLO, evaluate YOLO on the same 63 test frames: the numbers of section 2 are on
+valh-76, a different set.

@@ -43,3 +43,57 @@ def label_from_H(H, template, w, h, margin=0.0):
     x0, y0 = k[:, 0].min(), k[:, 1].min()
     x1, y1 = k[:, 0].max(), k[:, 1].max()
     return kpts, np.array([(x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0])
+
+
+# --------------------------------------------------------------- heatmap targets (keypoint + line models)
+
+def visible_ends(H, a, b, w, h, n=1000):
+    """((x, y), (x, y)): the ends, in image px, of the part of world segment a -> b that H puts in front of the camera
+    and inside the image, ordered from a to b; None when less than that is visible. An end is the painted end when it is
+    in view, the image border otherwise. Sampled, not solved, so a segment that runs behind the camera is still right.
+    ponytail: n samples fix an end to within |ab| / n (6 cm on a 61 m line); solve the border crossing if that matters."""
+    t = np.linspace(0.0, 1.0, n)[:, None]
+    xy, ok = project_points(H, np.asarray(a, float) * (1 - t) + np.asarray(b, float) * t, w, h)
+    ok &= (xy[:, 0] >= 0) & (xy[:, 0] <= w - 1) & (xy[:, 1] >= 0) & (xy[:, 1] <= h - 1)
+    idx = np.flatnonzero(ok)
+    return None if len(idx) < 2 else (xy[idx[0]], xy[idx[-1]])
+
+
+def render_heatmaps(H, points, segments, w, h, sigma=2.0):
+    """(len(points) + 2 * len(segments), h, w) float32 targets: a Gaussian centred exactly (sub-pixel) where H puts each
+    world point, then one channel per visible end of each world segment (`visible_ends`); a channel stays empty when its
+    point is not in view. The off-centre peak keeps the sub-pixel position in the target, `heatmap_peaks` reads it back."""
+    xy, ok = project_points(H, np.asarray(points, float).reshape(-1, 2), w, h)
+    centres = [p if o else None for p, o in zip(xy, ok)]
+    for a, b in segments:
+        ends = visible_ends(H, a, b, w, h)
+        centres += list(ends) if ends is not None else [None, None]
+    out = np.zeros((len(centres), h, w), np.float32)
+    r = int(3 * sigma) + 1
+    for c, p in enumerate(centres):
+        if p is None:
+            continue
+        cx, cy = int(round(p[0])), int(round(p[1]))
+        if not (0 <= cx < w and 0 <= cy < h):
+            continue
+        y0, y1, x0, x1 = max(0, cy - r), min(h, cy + r + 1), max(0, cx - r), min(w, cx + r + 1)
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        out[c, y0:y1, x0:x1] = np.exp(-((xx - p[0]) ** 2 + (yy - p[1]) ** 2) / (2.0 * sigma ** 2))
+    return out
+
+
+def heatmap_peaks(heat, thr=0.3):
+    """[(x, y) or None] per channel of (C, h, w) heatmaps: the maximum when it reaches `thr`, refined to sub-pixel by
+    the weighted centroid of its 3x3 neighbourhood."""
+    C, h, w = heat.shape
+    out = []
+    for c, i in enumerate(heat.reshape(C, -1).argmax(1)):
+        y, x = divmod(int(i), w)
+        if heat[c, y, x] < thr:
+            out.append(None)
+            continue
+        y0, y1, x0, x1 = max(0, y - 1), min(h, y + 2), max(0, x - 1), min(w, x + 2)
+        patch = heat[c, y0:y1, x0:x1].astype(np.float64)
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        out.append((float((xx * patch).sum() / patch.sum()), float((yy * patch).sum() / patch.sum())))
+    return out

@@ -125,3 +125,23 @@ def project_distorted(pose, k1, k2, world_pts, w, h):
     u = f[:, None] * x_distorted + w / 2.0
     v = f[:, None] * y_distorted + h / 2.0
     return (np.stack([u, v], axis=-1), q[..., 2])  # (n, m, 2), (n, m)
+
+
+def ptz_warp(H, w, h, pan=0.0, tilt=0.0, roll=0.0, zoom=1.0):
+    """(G, G @ H): the image homography G of the SAME camera turned about its own centre (radians; pan about the image
+    vertical, tilt > 0 looks down as in pose_to_H, roll about the optical axis) and zoomed by `zoom`, and the field
+    homography of the new view. Turning a camera about its centre moves every pixel by K' R K^-1 whatever the depth of the
+    scene, so a real frame warped by G, labelled with G @ H, is an exact new view - players, boards and stands included -
+    not an approximation; only the frame border goes missing. The focal length comes from `decompose_H`.
+    ponytail: principal point at the centre and no distortion, like the rest of this module; an H that is no pinhole
+    camera falls back to f = w, which keeps the label exact and only makes the turn slightly unphysical."""
+    pose = decompose_H(H, w, h)
+    f = pose["f"] if pose else float(w)
+    K = np.array([[f, 0, w / 2.0], [0, f, h / 2.0], [0, 0, 1.0]])
+    Kz = np.array([[f * zoom, 0, w / 2.0], [0, f * zoom, h / 2.0], [0, 0, 1.0]])
+    c, s = np.cos, np.sin
+    Rx = np.array([[1, 0, 0], [0, c(tilt), -s(tilt)], [0, s(tilt), c(tilt)]])
+    Ry = np.array([[c(pan), 0, s(pan)], [0, 1, 0], [-s(pan), 0, c(pan)]])
+    Rz = np.array([[c(roll), -s(roll), 0], [s(roll), c(roll), 0], [0, 0, 1]])
+    G = Kz @ Rz @ Rx @ Ry @ np.linalg.inv(K)
+    return G, G @ np.asarray(H, float)
