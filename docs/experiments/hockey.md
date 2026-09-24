@@ -559,6 +559,11 @@ section 14) has not been re-measured for the 90-point set.
   differences within a phase are not reliable signal.
 * One run each (pretrain-derived + finetune-derived), no repeats: per ADR 0003, treat the p50/p90 gaps against model A
   as indicative, not as a settled effect size.
+* A later evaluation of the fine-tuned B1 reported by the owner (same command, 2026-09-24 ~20:00) gave test 84% /
+  p50 10.5 / p90 218 / < 25 px 57%; nhl10 100% / 7.9, nhl4 53% / 7.2, nhl9 90% / 172 (coverage / p50 px). With the
+  plausibility gate (section 14d, `--gate`): 79% / 9.5 / p90 194; nhl4 47% / 7.0, nhl9 80% / 168. The gate removes far
+  less from B1 than from model A (A: p90 639 -> 17, 11 of 12 gross answers refused): B1's wrong nhl9 answers look like
+  real cameras, so they are harder to catch. Decision unchanged: keep model A.
 
 ## 14d. Homographies no camera can produce: a plausibility gate - `core.camera.is_plausible_view` (2026-09-24)
 
