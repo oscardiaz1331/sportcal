@@ -563,3 +563,35 @@ trips it (`datasets/soccer_labels`, field box +-52.5 x +-34 m).
 click labellers ("IMPOSIBLE", not a block). It has no tuned threshold, only a physical rule, but it was checked on these
 test frames only: confirm it on new frames before a product stage relies on it. At the next index rebuild (after B1),
 drop the 10 train/dev labels it refuses.
+
+## 14e. Fewer clicks for the end-view queue: carry a hand label along the shot; Claude as the clicker (2026-09-24)
+
+**Question:** the end-view queue (section 14b) is bursts of frames 0.5 s apart inside one shot. Can one hand label per
+few frames be carried to the rest by the camera motion (`core.motion`), and can Claude click the points instead?
+**Propagation - method:** the 24 labelled queue frames (3 shots: clip 0-4 s, nhl3 166-170 s, nhl7 160-164 s). Step
+motions every 5 frames from `core.motion.track_pair` (ice surface), chained from each hand label to every other label of
+its shot (backwards with the inverse), scored at the target's clicks (median px at 1920, min over the rink's mirrors:
+these labels were named without one convention). The error includes both labels' own noise (each label fits its own
+clicks within 1-6 px).
+
+| where the features come from | 0.5 s: p50 / max | 1.0 s | 1.5 s |
+|---|---|---|---|
+| whole frame (`region_kind="all"`) | **5.4 / 13.8** | **7.5 / 19.5** | **9.5 / 21.5** |
+| background only (stands, boards) | 5.0 / 78 | 6.9 / 91 | 9.2 / 84 |
+| ice only | 18 / 216 | 28 / 314 | 43 / 375 |
+| no motion (the start label as is; rink-grid measure) | ~60 | ~110 | ~150 |
+
+Background-only is best on nhl7 (2-3 px on the grid) but misses some clip pairs by 78-91 px; the whole frame never
+fails badly. Labelling one frame in three and carrying it to the other two gives ~5-8 px, worst ~20: better than the stored
+train labels (median 11-22 px, section 0b), not good enough for test. Three shots of one camera type.
+
+**Claude clicking - method:** one labelled frame (nhl7 frame 9750, 7 hand clicks) clicked by Claude from zoomed crops
+with a pixel grid before seeing the hand label; one unlabelled frame (clip frame 990, a glass-level centre-ice view)
+judged by eye by the owner. **Result:** 13 points at first; the least-squares residuals (up to 46 px) exposed 2 wrong
+identities: both posts (seen through the net mesh by the owner) were placed where a crease line meets the goal line and
+where the goal line disappears behind the net frame. Without them (11 points, self-fit median 5.9 px) Claude's H is
+5.8 px (median) from the hand clicks and 5.7 px from the hand H over the rink grid; with them, 9.3 and 16.7. The hand H misses Claude's clicks on the right circle by 33-44 px, where the hand
+H extrapolates (no hand click there); neither H matches that circle's outer edge (lens distortion is the likely reason).
+**Decision:** n = 1, not a measure of Claude as a labeller. The failure mode that matters is identity, not pixels: a
+wrong name costs tens of px and only a residual check or a human catches it. Claude's clicks stay candidates for a
+human to accept, never labels on their own.
