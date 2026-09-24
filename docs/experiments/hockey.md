@@ -521,6 +521,45 @@ the comparison isolates the keypoints; the end-view labels of 14b go into a late
     python -m sportcal.lab.hockey.train_kpline --phase finetune --keypoints derived --init runs/kpline/pretrain-derived/best_h.pt
     python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune-derived/best_h.pt --split test
 
+**Result** (2026-09-24, same index as model A, batch 4 / workers 4 throughout, no OOM):
+
+| phase | epochs | wall time | batch |
+|---|---|---|---|
+| pretrain-derived | 60 | ~113 min (~110 s/epoch) | 4 |
+| finetune-derived | 30 | ~5 min (~5 s/epoch after the first) | 4 |
+
+~40% slower per epoch than model A's pretrain (110 s vs 80 s, section 14): the extra 34 derived points add 34 of the
+108 output channels. Checkpoint chosen the same way as model A (lowest median H error on dev). Compared with model A
+fine-tune on the same 63-frame `test` split, total and per video:
+
+| model | split | n | coverage | p50 | p90 | < 10 px | < 25 px |
+|---|---|---|---|---|---|---|---|
+| A, finetune | test (total) | 63 | 78% | 9.2 | 639.2 | 44% | 59% |
+| B1, finetune-derived | test (total) | 63 | 81% | 10.3 | 249.2 | 38% | 57% |
+| A, finetune | nhl10 | 26 | 100% | 7.2 | 15.8 | 73% | 100% |
+| B1, finetune-derived | nhl10 | 26 | 100% | 7.7 | 13.9 | 65% | 92% |
+| A, finetune | nhl4 | 17 | 59% | 7.0 | 326.0 | 41% | 47% |
+| B1, finetune-derived | nhl4 | 17 | 53% | 7.9 | 148.0 | 41% | 47% |
+| A, finetune | nhl9 (outdoor) | 20 | 65% | 512.0 | 1902.3 | 10% | 15% |
+| B1, finetune-derived | nhl9 (outdoor) | 20 | 80% | 196.9 | 1279.6 | 0% | 20% |
+
+**Decision:** derived keypoints do not make model A more precise where it already answers - p50 on the two clean indoor
+videos (nhl10, nhl4) is the same or slightly worse than the 56-point model - but they buy some robustness: total-`test`
+p90 falls from 639 to 249 px, and on nhl9 (the outdoor game, out of distribution) coverage rises 65% -> 80% and p50
+falls 512 -> 197 px, still far from usable. Consistent with the section 14b finding: derived points are not the fix for
+refusals on views the network has not seen, they mainly shrink how badly the frames that do fail miss. Not a
+replacement for model A as proposed in section 14; the keypoint-count confidence gate (>= 7, measured on 56 points in
+section 14) has not been re-measured for the 90-point set.
+
+**Caveats:**
+
+* Only `test` was evaluated here (the brief for this run), not `test_leaky`; the `test_leaky` leakage caveat of
+  section 14 still applies if that split is measured later.
+* Same dev-noise caveat as section 14: checkpoints were chosen on stored dev labels ~11-16 px off, so small per-epoch
+  differences within a phase are not reliable signal.
+* One run each (pretrain-derived + finetune-derived), no repeats: per ADR 0003, treat the p50/p90 gaps against model A
+  as indicative, not as a settled effect size.
+
 ## 14d. Homographies no camera can produce: a plausibility gate - `core.camera.is_plausible_view` (2026-09-24)
 
 **Question:** an overlay showed a rink line crossing a faceoff circle: impossible for a real camera, easy for a free
