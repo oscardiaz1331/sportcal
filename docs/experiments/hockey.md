@@ -467,3 +467,47 @@ the best NHL method measured: ~10x lower median than YOLO on the same frames, an
 videos it never saw it reaches the ~8 px target when it answers. Proposed for ADR 0003 as the first product stage with
 YOLO as fallback, once the keypoint-count gate is confirmed on independent frames. Open: outdoor / unusual rinks (need
 training frames of that kind) and sparse views (refused, not wrong).
+
+## 14b. Why model A refuses or fails: missing views, not missing markings (2026-09-24)
+
+**Question:** the refused test frames looked "sparse". Is the fix more keypoints per frame (derived points, circles), or
+something else?
+**Method:** for the 26 `test` frames model A (fine-tune) refuses or misses by > 50 px, count what the hand label puts in
+frame: template keypoints, straight lines, circles with > 25% of their arc in view; compare with the keypoints the model
+finds above 0.3. `mine_views.view_angle` (angle of the rink's long axis in the image) separates the side camera from a
+camera behind the goal.
+**Result:**
+
+| frames | template keypoints in frame | straight lines | circles | keypoints the model finds |
+|---|---|---|---|---|
+| nhl4, refused / > 50 px (9) | 12-50 | 2-8 | 2-5 | 1-5 |
+| nhl9, refused / > 50 px (17) | 11-20 | 2-5 | 1-3 | 2-6 |
+| test + test_leaky frames within 25 px (57) | median 17 (min 7) | median 4 | >= 1 in all | - |
+
+The markings are there; the network does not find them. Six of the 17 nhl4 test frames come from an end-zone camera
+(view angle > 45 degrees), a view with 4 frames among the 585 NHL train frames: model A answers 1 of the 6, wrongly.
+On the side-camera test frames (57, nhl9 included) it answers 84% with p50 8.6 px. nhl9 is the outdoor game.
+**Decision:** more keypoints per frame would not rescue these frames - the network would have to learn them in the views
+it has not seen. The fix is training data of those views: `mine_views` finds end-zone shots in unlabelled video by
+thumbnail nearest-neighbour against the labelled end / side frames. In the train videos it found the only two such
+shots (clip 0-5 s, nhl7 ~161-165 s) and one side-view false positive (nhl3); 39 frames are queued in
+`datasets/hockeyrink_nhl_endview` for hand labels, which `build_h_index` puts in train. Two shots from two arenas are
+little diversity: new NHL games (`fetch_clips`) are the real source.
+
+    python -m sportcal.lab.hockey.mine_views          # -> datasets/hockeyrink_nhl_endview/queue.json
+
+## 14c. Keypoints derived from the circles ("model B1") - `train_kpline --keypoints derived` (pipeline ready, not trained)
+
+**Question:** do PnLCalib-style derived keypoints make model A more precise or more robust where it already answers?
+Section 14b says they are not the fix for the refused views; this measures what they add on the rest.
+**Setup:** `rink.derived_keypoints` adds 34 points to the 56: on each of the 5 painted circles the two points where the
+tangent runs across the rink and the four at 45 degrees (the hash marks and centre-line crossings already sit near the
+other two extremes), and the middle of each rounded board corner - 108 output channels instead of 74. Everything else as
+section 14. The set is closed under the rink's mirrors (`tests/test_sports.py`), so mirrored frames rename them. Runs go
+to `runs/kpline/<phase>-derived`; `--eval` reads the set from the weights. Trained on the same index as model A so that
+the comparison isolates the keypoints; the end-view labels of 14b go into a later run.
+**Caveat:** the keypoint-count gate of section 14 (>= 7) was measured on 56 points; with 90 it has to be measured again.
+
+    python -m sportcal.lab.hockey.train_kpline --phase pretrain --keypoints derived
+    python -m sportcal.lab.hockey.train_kpline --phase finetune --keypoints derived --init runs/kpline/pretrain-derived/best_h.pt
+    python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune-derived/best_h.pt --split test

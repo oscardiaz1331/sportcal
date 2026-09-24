@@ -188,6 +188,23 @@ def rink_polylines(p):
     ]
 
 
+def derived_keypoints(p):
+    """(34, 2) world points that a keypoint model can learn on top of the 56 of `build_template`, from the markings
+    that are large in almost every view. On each painted circle (centre circle, then the faceoff circles in CLASSES
+    order): the two points where the tangent runs across the rink (angles 0 and 180) and the four at 45 degrees - the
+    hash marks and the centre line already sit near the other two extremes. Then the middle of each rounded board corner.
+    All are defined on the template, so a mirror of the rink maps the set onto itself and `canonicalize` renames them."""
+    L, W, r, cy = p["length"], p["width"], p["corner_r"], p["width"] / 2
+    gl = [p["goal_line_from_end"], L - p["goal_line_from_end"]]
+    dot, dy, R = p["dot_from_goal_line"], p["dot_from_axis"], p["circle_r"]
+    centres = [(L / 2, cy), (gl[0] + dot, cy - dy), (gl[0] + dot, cy + dy), (gl[1] - dot, cy - dy), (gl[1] - dot, cy + dy)]
+    a = np.radians([0, 180, 45, 135, 225, 315])
+    pts = [np.c_[cx + R * np.cos(a), cyc + R * np.sin(a)] for cx, cyc in centres]
+    corners = [((r, r), 225), ((L - r, r), 315), ((L - r, W - r), 45), ((r, W - r), 135)]
+    pts.append(np.array([(cx + r * np.cos(np.radians(t)), cyc + r * np.sin(np.radians(t))) for (cx, cyc), t in corners]))
+    return np.vstack(pts)
+
+
 # --------------------------------------------------------------- drawing
 
 def draw_rink(img, to_img, p=RINK_NHL, color=(70, 70, 70), thickness=2):

@@ -2,11 +2,13 @@
 predicts a heatmap per template keypoint and one per visible end of every straight line; the template and a DLT turn
 them into H. Trained in two phases from the per-frame H index (`build_h_index`): pretrain on every train label (NHL +
 IIHF, the stored NHL ones are 11-22 px off), then fine-tune on the hand labels only. Numbers: hockey.md section 14.
+`--keypoints derived` adds the points on the circles and board corners (`rink.derived_keypoints`).
 
     python -m sportcal.lab.hockey.train_kpline --phase pretrain
     python -m sportcal.lab.hockey.train_kpline --phase finetune --init runs/kpline/pretrain/best_h.pt
     python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune/best_h.pt --split test
     python -m sportcal.lab.hockey.train_kpline --eval runs/hockeyrink/yolo26m-18/weights/best_homography.pt --yolo
+    python -m sportcal.lab.hockey.train_kpline --phase pretrain --keypoints derived     # + circle points, section 14c
 
 Targets are rendered from H every time, never stored: a flip or a camera turn (`core.camera.ptz_warp`) changes H,
 `canonicalize` renames the points, and no remapping table exists to go wrong. Checkpoints are chosen by the median
@@ -35,18 +37,28 @@ from sportcal.sports.hockey import rink
 SIZE = (960, 544)                            # network input: a 16:9 frame at 960 px, padded at the bottom to /32
 OUT_SIZE = (SIZE[0] // 2, SIZE[1] // 2)      # heatmaps at half the input (HalfResUNet)
 SIGMA = 1.5                                  # heatmap Gaussian, px at 480 (6 px at 1920)
-TEMPLATE = {k: rink.build_template(p) for k, p in PARAMS.items()}
 SEGMENTS = {k: [(a, b) for _, a, b in rink.straight_lines(p)] for k, p in PARAMS.items()}
-NKP = 56
-NCH = NKP + 2 * len(SEGMENTS["hockey-nhl"])
+# the 56 keypoints of the rink template, or those plus the points derived from the circles and board corners
+KEYPOINT_SETS = {"base": rink.build_template,
+                 "derived": lambda p: np.vstack([rink.build_template(p), rink.derived_keypoints(p)])}
 GRID = {k: np.stack(np.meshgrid(np.arange(0.0, p["length"] + 1e-9, 1.0), np.arange(0.0, p["width"] + 1e-9, 1.0)),
                     -1).reshape(-1, 2) for k, p in PARAMS.items()}
 # hand labels of training videos; test_leaky gives its frames to fine-tuning (the clean test set is `test`)
 FINETUNE_SPLITS = ("train", "test_leaky")
 
 
+def keypoints(kp_set):
+    """{template name: (K, 2) world keypoints} of one keypoint set. Passed around explicitly rather than set as a module
+    global: DataLoader workers on Windows re-import this module and would see the default."""
+    return {k: KEYPOINT_SETS[kp_set](p) for k, p in PARAMS.items()}
+
+
+def n_channels(kp):
+    return len(kp["hockey-nhl"]) + 2 * len(SEGMENTS["hockey-nhl"])
+
+
 class HalfResUNet(UNetResNet34):
-    """UNetResNet34 whose heatmaps stay at half the input resolution: 74 channels at full resolution run out of memory
+    """UNetResNet34 whose heatmaps stay at half the input resolution: 74+ channels at full resolution run out of memory
     (6 GB at batch 2 on the CPU, before the backward pass).
     ponytail: reading perfect half-resolution heatmaps back with `heatmap_peaks` already costs ~1 px at 1920; a
     quadratic peak fit or an offset head is the upgrade if that ever dominates."""
@@ -71,8 +83,8 @@ class Frames(Dataset):
     """(image tensor, target heatmaps, row index). With `augment`, a random camera turn / zoom and a mirror, applied to
     the real frame and to its H alike (exact, see ptz_warp), plus a brightness / contrast jitter."""
 
-    def __init__(self, rows, augment):
-        self.rows, self.augment = rows, augment
+    def __init__(self, rows, augment, kp):
+        self.rows, self.augment, self.kp = rows, augment, kp
 
     def __len__(self):
         return len(self.rows)
@@ -93,7 +105,7 @@ class Frames(Dataset):
             img = cv2.convertScaleAbs(img, alpha=rng.uniform(0.75, 1.25), beta=rng.uniform(-25, 25))
         x, s = to_input(img)
         s /= 2                                                     # heatmaps are at half the input
-        tgt = render_heatmaps(np.diag([s, s, 1.0]) @ H, TEMPLATE[r["template"]], SEGMENTS[r["template"]], *OUT_SIZE,
+        tgt = render_heatmaps(np.diag([s, s, 1.0]) @ H, self.kp[r["template"]], SEGMENTS[r["template"]], *OUT_SIZE,
                               SIGMA)
         return x, torch.from_numpy(tgt), i
 
@@ -118,16 +130,17 @@ def focal_loss(logits, target):
     return -loss / pos.sum().clamp(min=1)
 
 
-def estimate_H(heat, template, w0, thr=0.3):
-    """H in original-frame px from one (NCH, h, w) sigmoid stack, or None."""
+def estimate_H(heat, template, w0, kp, thr=0.3):
+    """H in original-frame px from one (channels, h, w) sigmoid stack, or None."""
     s = OUT_SIZE[0] / w0
     peaks = heatmap_peaks(heat, thr)
-    tpl, segs = TEMPLATE[template], SEGMENTS[template]
-    wp = [tpl[k] for k in range(NKP) if peaks[k] is not None]
-    ip = [np.asarray(peaks[k]) / s for k in range(NKP) if peaks[k] is not None]
+    tpl, segs = kp[template], SEGMENTS[template]
+    nkp = len(tpl)
+    wp = [tpl[k] for k in range(nkp) if peaks[k] is not None]
+    ip = [np.asarray(peaks[k]) / s for k in range(nkp) if peaks[k] is not None]
     wl, il = [], []
     for j, (a, b) in enumerate(segs):
-        e0, e1 = peaks[NKP + 2 * j], peaks[NKP + 2 * j + 1]
+        e0, e1 = peaks[nkp + 2 * j], peaks[nkp + 2 * j + 1]
         if e0 is not None and e1 is not None and np.hypot(e0[0] - e1[0], e0[1] - e1[1]) > 5:
             wl.append(line_through(a, b))
             il.append(line_through(np.asarray(e0) / s, np.asarray(e1) / s))
@@ -135,16 +148,16 @@ def estimate_H(heat, template, w0, thr=0.3):
 
 
 @torch.no_grad()
-def evaluate(model, rows, device, batch=4):
+def evaluate(model, rows, device, kp, batch=4):
     """Error px at 1920 against the label H, one per row (inf when no H comes out)."""
     model.eval()
     errs = [np.inf] * len(rows)
-    for x, _, idx in DataLoader(Frames(rows, augment=False), batch_size=batch, num_workers=2):
+    for x, _, idx in DataLoader(Frames(rows, augment=False, kp=kp), batch_size=batch, num_workers=2):
         with torch.autocast(device.type, enabled=device.type == "cuda"):
             heat = torch.sigmoid(model(x.to(device)).float()).cpu().numpy()
         for hm, i in zip(heat, idx.tolist()):
             r = rows[i]
-            H = estimate_H(hm, r["template"], r["w"])
+            H = estimate_H(hm, r["template"], r["w"], kp)
             if H is not None:
                 errs[i] = geom_error(H, np.asarray(r["H"], float), GRID[r["template"]], r["w"], r["h"])
     return np.array(errs)
@@ -177,10 +190,11 @@ def summary(errs):
 def train(args, rows, device):
     tr = select(rows, args.phase)
     dev = [r for r in rows if r["split"] == "dev" and r["template"] == "hockey-nhl"]
-    out = RUNS / "kpline" / args.phase
+    kp = keypoints(args.keypoints)
+    out = RUNS / "kpline" / (args.phase + ("" if args.keypoints == "base" else "-" + args.keypoints))
     out.mkdir(parents=True, exist_ok=True)
-    print("{}: {} train frames, {} dev frames -> {}".format(args.phase, len(tr), len(dev), out))
-    model = HalfResUNet(ncls=NCH).to(device)
+    print("{}: {} train frames, {} dev frames, {} channels -> {}".format(args.phase, len(tr), len(dev), n_channels(kp), out))
+    model = HalfResUNet(ncls=n_channels(kp)).to(device)
     if args.init:
         model.load_state_dict(torch.load(args.init, map_location=device))
     else:   # CenterNet's prior: start every pixel at p = 0.01, or the ~130k negatives swamp the first steps
@@ -190,9 +204,9 @@ def train(args, rows, device):
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, epochs)
     scaler = torch.amp.GradScaler(enabled=device.type == "cuda")
-    loader = DataLoader(Frames(tr, augment=True), batch_size=args.batch, shuffle=True, num_workers=args.workers,
+    loader = DataLoader(Frames(tr, augment=True, kp=kp), batch_size=args.batch, shuffle=True, num_workers=args.workers,
                         drop_last=True, persistent_workers=args.workers > 0)
-    best = np.inf
+    best, saved = np.inf, False
     for ep in range(epochs):
         model.train()
         t0, tot, n = time.time(), 0.0, 0
@@ -211,11 +225,11 @@ def train(args, rows, device):
         line = "epoch {:3d}  loss {:.4f}  {:.0f}s".format(ep, tot / max(n, 1), time.time() - t0)
         torch.save(model.state_dict(), out / "last.pt")
         if (ep + 1) % args.eval_every == 0 or ep == epochs - 1:
-            errs = evaluate(model, dev, device)
+            errs = evaluate(model, dev, device, kp)
             p50 = np.median(errs) if np.isfinite(errs).any() else np.inf
             line += "  dev " + summary(errs)
-            if p50 < best:
-                best = p50
+            if p50 < best or not saved:          # a run that never answers on dev still leaves its own file
+                best, saved = p50, True
                 torch.save(model.state_dict(), out / "best_h.pt")
                 line += "  <- best_h.pt"
         print(line, flush=True)
@@ -234,6 +248,8 @@ def main():
     ap.add_argument("--eval", help="weights to evaluate instead of training")
     ap.add_argument("--split", default="test", help="with --eval: test | test_leaky | dev")
     ap.add_argument("--yolo", action="store_true", help="with --eval: the weights are a YOLO pose model (product path)")
+    ap.add_argument("--keypoints", choices=tuple(KEYPOINT_SETS), default="base",
+                    help="keypoint set to train (runs go to <phase>-derived); --eval reads it from the weights")
     args = ap.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rows = [json.loads(line) for line in open(INDEX, encoding="utf-8")]
@@ -244,9 +260,11 @@ def main():
     if args.yolo:
         errs = evaluate_yolo(args.eval, rows, device)
     else:
-        model = HalfResUNet(ncls=NCH).to(device)
-        model.load_state_dict(torch.load(args.eval, map_location=device))
-        errs = evaluate(model, rows, device)
+        state = torch.load(args.eval, map_location=device)
+        kp = next(keypoints(k) for k in KEYPOINT_SETS if n_channels(keypoints(k)) == state["final.1.weight"].shape[0])
+        model = HalfResUNet(ncls=n_channels(kp)).to(device)
+        model.load_state_dict(state)
+        errs = evaluate(model, rows, device, kp)
     for r, e in zip(rows, errs):
         print("{:<40} {:>8.1f}".format(r["id"], e))
     for v in sorted({r["video"] for r in rows}):
