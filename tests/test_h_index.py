@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from sportcal.lab.hockey.build_h_index import HAND, HOLDOUT_VIDEOS, canonicalize, split_of, video_of
+from sportcal.lab.hockey.build_h_index import EXTRA, HAND, HOLDOUT_VIDEOS, canonicalize, split_of, video_of
 from sportcal.sports.hockey import rink
 
 
@@ -18,6 +18,7 @@ def test_held_out_videos_never_reach_train_or_dev():
     assert split_of(HAND, "val", "nhl5") == "test_leaky"
     assert (split_of("hockeyrink_nhl", "train", "nhl5"), split_of("hockeyrink_nhl", "val", "nhl5")) == ("train", "dev")
     assert split_of("hockeyrink_nhl", "train", "nhl5", hand=True) == "train"
+    assert split_of(EXTRA[0], "val", "nhl5") == "train" and split_of(EXTRA[0], "val", "nhl4") == "test"
 
 
 def test_every_mirrored_label_comes_back_to_one_convention():
@@ -32,3 +33,14 @@ def test_every_mirrored_label_comes_back_to_one_convention():
     for S, flips in ((np.eye(3), ""), (fx, "x"), (fy, "y"), (fx @ fy, "xy")):
         Hc, got = canonicalize(H @ S, p)
         assert got == flips and np.allclose(Hc, H, atol=1e-9), flips
+
+
+def test_view_angle_tells_the_side_camera_from_the_end_zone_camera():
+    """The rink's long axis runs across the image for the side camera and up it for a camera behind the goal."""
+    from sportcal.core.camera import pose_to_H
+    from sportcal.lab.hockey.mine_views import view_angle
+    p = rink.RINK_NHL
+    L, W, w, h = p["length"], p["width"], 1920, 1080
+    side = pose_to_H(np.array([[L / 2, -20.0, 15.0, 0.0, np.radians(25), 1500.0]]), w, h)[0]
+    end = pose_to_H(np.array([[-12.0, W / 2, 10.0, np.radians(90), np.radians(20), 1500.0]]), w, h)[0]
+    assert view_angle(side, w, h) < 20 and view_angle(end, w, h) > 70

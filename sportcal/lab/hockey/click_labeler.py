@@ -258,7 +258,8 @@ def lee_frame(v, i):
     for p in (ROOT / "datasets" / "hockeyrink_nhl" / "images").glob("*/{}_*.jpg".format(v)):
         if int(p.stem.rsplit("_", 1)[1]) == i:
             return cv2.imread(str(p))
-    cap = cv2.VideoCapture(str(ROOT / (v + ".mp4")))
+    path = ROOT / (v + ".mp4")
+    cap = cv2.VideoCapture(str(path if path.exists() else ROOT / (v + ".mp4.webm")))   # clip is a .webm
     cap.set(cv2.CAP_PROP_POS_FRAMES, i)
     ok, fr = cap.read()
     cap.release()

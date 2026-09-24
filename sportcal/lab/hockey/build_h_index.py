@@ -33,6 +33,7 @@ PARAMS = {"hockey-nhl": rink.RINK_NHL, "hockey-iihf": rink.RINK_IIHF}
 TEMPLATES = {k: rink.build_template(p) for k, p in PARAMS.items()}
 FITTED = (("hockeyrink_nhl", "hockey-nhl"), ("hockeyrink", "hockey-iihf"))
 HAND = "hockeyrink_nhl_valh"             # new frames, hand-labelled
+EXTRA = ("hockeyrink_nhl_endview",)      # new frames hand-labelled for training (views the train set lacks)
 RELABELLED = "hockeyrink_nhl_audit"      # hockeyrink_nhl frames hand-labelled again
 
 
@@ -66,6 +67,8 @@ def split_of(dataset, orig_split, video, hand=False):
     """Per-video split: a held-out video only ever lands in the test sets (a hand label from it is a test frame)."""
     if dataset == HAND:
         return "test" if video in HOLDOUT_VIDEOS else "test_leaky"
+    if dataset in EXTRA:
+        return "test" if video in HOLDOUT_VIDEOS else "train"
     if video in HOLDOUT_VIDEOS:
         return "test" if hand else "excluded"
     return "train" if orig_split == "train" else "dev"
@@ -124,14 +127,15 @@ def build():
                     continue
                 rows.append(_row(dataset, lbl.stem, img, w, h, template, source, fit[0],
                                  {"inliers": len(fit[1]), "resid_px": round(float(info), 2)}, orig_split))
-    for (video, frame), H in sorted(_hand_labels(HAND).items()):
-        stem = "{}_{:06d}".format(video, frame)
-        img = DATASETS / HAND / "images" / "val" / (stem + ".jpg")
-        w, h = _size(img)
-        if w is None:
-            dropped["{}: no image".format(HAND)] += 1
-            continue
-        rows.append(_row(HAND, stem, img, w, h, "hockey-nhl", "hand", H, None, "val"))
+    for dataset in (HAND, *EXTRA):
+        for (video, frame), H in sorted(_hand_labels(dataset).items()):
+            stem = "{}_{:06d}".format(video, frame)
+            img = DATASETS / dataset / "images" / "val" / (stem + ".jpg")
+            w, h = _size(img)
+            if w is None:
+                dropped["{}: no image".format(dataset)] += 1
+                continue
+            rows.append(_row(dataset, stem, img, w, h, "hockey-nhl", "hand", H, None, "val"))
     return rows, dropped
 
 
