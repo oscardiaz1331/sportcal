@@ -27,6 +27,8 @@ from sportcal.paths import ROOT
 from sportcal.lab.hockey import make_line_masks as MM
 from sportcal.lab.hockey import relabel_reproject as RP
 from sportcal.sports.hockey import rink
+from sportcal.core.camera import is_plausible_view
+from sportcal.core.geometry import click_sensitivity
 from sportcal.core.labels import label_from_H  # noqa: E402
 
 OUT = ROOT / "datasets" / os.environ.get("SPORTCAL_HOCKEY_LABELS", "hockeyrink_nhl_valh")
@@ -47,45 +49,6 @@ def canonicalizar(H, params):
         M = np.array([[-1.0, 0, L], [0, 1.0, 0], [0, 0, 1.0]])
         return H @ M, True
     return H, False
-
-
-def sensibilidad(world, img_pts, Hn, w, h, params=None, sigma=2.0, n=24):
-    """Cuanto se mueve la plantilla DENTRO DEL FRAME (px a 1920, mediana) si cada clic
-    se desvia ~sigma px: rejilla de puntos de la imagen -> mundo con la H ajustada ->
-    imagen con H reajustadas sobre clics perturbados. Es la medida que importa: no
-    cuanta pista abarcan los puntos (un plano cerrado solo ve un trozo pequeno y no se
-    le puede pedir esquinas opuestas) sino si el ajuste es estable en lo que se ve.
-
-    Solo cuentan los puntos de la rejilla que caen SOBRE LA PISTA (mundo dentro del
-    rectangulo +-2 m): la grada y el horizonte de la imagen se disparan con cualquier
-    ajuste y no son donde se dibujan las lineas (primera version, promediando toda la
-    imagen: avisaba en el 91-100% de los casos aunque el error real fuera de 7px)."""
-    params = params or rink.RINK_NHL
-    L, Wd = params["length"], params["width"]
-    rng = np.random.default_rng(0)
-    sc = w / 1920.0
-    gx, gy = np.meshgrid(np.linspace(0.05 * w, 0.95 * w, 14), np.linspace(0.05 * h, 0.95 * h, 9))
-    G = np.c_[gx.ravel(), gy.ravel()]
-    try:
-        with np.errstate(all="ignore"):
-            Wg = _proj(np.linalg.inv(Hn), G)
-    except np.linalg.LinAlgError:
-        return float("inf")
-    en_pista = (np.isfinite(Wg).all(1) & (Wg[:, 0] > -2) & (Wg[:, 0] < L + 2) & (Wg[:, 1] > -2) & (Wg[:, 1] < Wd + 2))
-    if en_pista.sum() < 4:
-        return float("inf")
-    G, Wg = G[en_pista], Wg[en_pista]
-    wf = np.asarray(world, np.float32)
-    d = []
-    for _ in range(n):
-        noisy = np.asarray(img_pts, np.float64) + rng.normal(0, sigma * sc, np.shape(img_pts))
-        Hi, _ = cv2.findHomography(wf, noisy.astype(np.float32), 0)
-        if Hi is None or not np.all(np.isfinite(Hi)):
-            return float("inf")
-        with np.errstate(all="ignore"):
-            d.append(np.linalg.norm(_proj(Hi, Wg) - G, axis=1) / sc)
-    d = np.concatenate(d)
-    return float(np.median(d[np.isfinite(d)])) if np.isfinite(d).any() else float("inf")
 
 
 def ajusta(world, img_pts, params, w, h=None):
@@ -122,11 +85,10 @@ def ajusta(world, img_pts, params, w, h=None):
     res = np.linalg.norm(_proj(Hn, world) - img_pts, axis=1) * 1920.0 / w
     Hc, espejo = canonicalizar(Hn, params)
     aviso = None
-    sens = sensibilidad(world, img_pts, Hn, w, h if h else w * 9 / 16, params)
-    # calibrado con verdad conocida (352 configuraciones de 4 puntos aleatorios sobre 19
-    # frames de val): error real ~ 0.42 x sens (mediana; p90 ~1.2x); umbral 30 avisa al 56%
-    # de esas configuraciones y de las que NO avisa solo el 6% tiene error real > 15px.
-    esperado = 0.42 * sens
+    h = h if h else w * 9 / 16
+    caja = (0.0, params["length"], 0.0, params["width"])
+    sens = click_sensitivity(world, img_pts, Hn, w, h, caja)
+    esperado = 0.42 * sens      # error real ~0.42 x sens, umbral 30: calibrado en hockey.md seccion 11
     if sens > 30.0:
         aviso = ("Ajuste poco estable: con clics a ±2px la plantilla puede desviarse ~{:.0f}px dentro del "
                  "frame. No bloquea; se corrige añadiendo o arrastrando mas puntos (mejor si no estan "
@@ -134,6 +96,10 @@ def ajusta(world, img_pts, params, w, h=None):
     elif n == 4:
         aviso = ("con 4 puntos el ajuste es exacto (residuo 0); error esperado ~{:.0f}px: "
                  "revisa el dibujo o añade un 5o punto".format(esperado))
+    if not is_plausible_view(Hn, w, h, caja):
+        aviso = ("IMPOSIBLE: ninguna camara real da esta H (parte de la pista quedaria detras de la camara "
+                 "y ninguna focal la explica): revisa que no haya un punto mal asignado. "
+                 + (aviso or ""))
     return Hc, [float(r) for r in res], espejo, aviso, Hn
 
 

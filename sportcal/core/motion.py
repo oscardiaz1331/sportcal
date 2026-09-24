@@ -14,7 +14,11 @@ Results and thresholds that worked live in docs/experiments/, not here.
 import cv2
 import numpy as np
 
+from sportcal.core import surface as SUR
+
 MODELS = ("homography", "affine", "similarity")
+REGIONS = ("background", "field", "all")
+W_WORK = 960            # width the frames are tracked at
 _MIN_POINTS = {"homography": 4, "affine": 3, "similarity": 2}
 _LK_CRITERIA = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01)
 
@@ -123,3 +127,103 @@ def chain(motions):
 def propagate_homography(H0, M):
     """Field homography of the next frame: world -> frame-0 pixels (H0) followed by frame 0 -> frame 1 (M)."""
     return np.asarray(M, float) @ np.asarray(H0, float)
+
+
+def to_work(frame, w=W_WORK):
+    """Frame resized to the working width (INTER_AREA)."""
+    h0, w0 = frame.shape[:2]
+    return cv2.resize(frame, (w, int(round(h0 * w / w0))), interpolation=cv2.INTER_AREA)
+
+
+def to_native_motion(M, w_native, w_work=W_WORK):
+    """A motion estimated in working pixels, expressed in native pixels (the ones a native H lives in)."""
+    s = w_native / float(w_work)
+    S = np.diag([s, s, 1.0])
+    return S @ np.asarray(M, float) @ np.linalg.inv(S)
+
+
+def surface_region(work_bgr, surface, chi2=10.17):
+    """Boolean play region of `surface` ("ice" | "grass", `core.surface`): robust Gaussian, then filled."""
+    return SUR.play_region(SUR.robust_surface(work_bgr, chi2=chi2, surface=surface)) > 0
+
+
+def background_mask(work_bgr, surface, erode_px=6, chi2=10.17):
+    """(mask uint8, region bool): everything that is NOT the play surface, eroded so no feature sits on the boundary."""
+    region = surface_region(work_bgr, surface, chi2)
+    k = 2 * int(erode_px) + 1
+    return cv2.erode((~region).astype(np.uint8), np.ones((k, k), np.uint8)), region
+
+
+def field_mask(work_bgr, surface, erode_px=6, chi2=10.17, close_px=9):
+    """(mask uint8, region bool): the play surface INCLUDING the painted lines, eroded away from its border.
+
+    The robust Gaussian leaves the lines (and the players) as holes in the surface region; closing fills the thin ones, so
+    a feature can sit on a line or on a line crossing."""
+    region = surface_region(work_bgr, surface, chi2)
+    k = 2 * int(close_px) + 1
+    filled = cv2.morphologyEx(region.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    e = 2 * int(erode_px) + 1
+    return cv2.erode(filled, np.ones((e, e), np.uint8)), region
+
+
+def track_pair(frame0, frame1, surface, erode_px=6, region_kind="background", **kw):
+    """Motion frame0 -> frame1 (both native BGR) from the chosen part of the picture, in working pixels.
+
+    region_kind: "background" = everything that is not play surface (stands, boards), "field" = the play surface with its
+    painted lines, "all" = no restriction. Returns the dict of `estimate_motion` plus "work0", "work1" (resized frames),
+    "region" (play region of frame 0) and "mask" (where features were allowed). Extra keyword arguments go to
+    `estimate_motion`."""
+    if region_kind not in REGIONS:
+        raise ValueError("region_kind must be one of {}".format(REGIONS))
+    w0, w1 = to_work(frame0), to_work(frame1)
+    if region_kind == "background":
+        mask, region = background_mask(w0, surface, erode_px)
+    elif region_kind == "field":
+        mask, region = field_mask(w0, surface, erode_px)
+    else:
+        region = surface_region(w0, surface)
+        mask = np.ones(region.shape, np.uint8)
+    res = estimate_motion(cv2.cvtColor(w0, cv2.COLOR_BGR2GRAY), cv2.cvtColor(w1, cv2.COLOR_BGR2GRAY), mask=mask, **kw)
+    res.update({"work0": w0, "work1": w1, "region": region, "mask": mask})
+    return res
+
+
+def track_video(get_frame, frame0, H0, surface, step=5, n=40, refine=None, region_kind="background", erode_px=6, **kw):
+    """Carry a homography (or just the camera motion, when H0 is None) through a clip, one short step at a time.
+
+    get_frame(i) -> native BGR frame or None. H0 maps world to NATIVE pixels of frame0. At every step the background
+    motion is estimated (`track_pair`) and chained onto H; `refine(native_frame, H) -> (H, score)`, if given, then pulls H
+    back onto what the sport can see in that frame (its painted lines). Yields one dict per frame, the first being frame0
+    itself: {"frame", "H" (native, or None), "M" (step motion in working pixels, None at frame0), "cum" (frame0 -> this
+    frame, working pixels), "n_selected", "n_inliers", "median_residual", "points" (working-pixel inlier positions in the
+    previous frame), "score" (from refine), "lost"}. Stops after a step that loses the background (a shot cut or a
+    close-up), which is reported with "lost": True."""
+    prev = get_frame(frame0)
+    if prev is None:
+        return
+    w_native = prev.shape[1]
+    H = None if H0 is None else np.asarray(H0, float)
+    cum = np.eye(3)
+    yield {"frame": frame0, "H": H, "M": None, "cum": cum, "n_selected": 0, "n_inliers": 0, "median_residual": float("nan"),
+           "points": np.zeros((0, 2)), "score": None, "lost": False}
+    for k in range(1, n + 1):
+        i = frame0 + k * step
+        cur = get_frame(i)
+        if cur is None:
+            return
+        r = track_pair(prev, cur, surface, erode_px=erode_px, region_kind=region_kind, **kw)
+        row = {"frame": i, "H": H, "M": r["M"], "n_selected": r["n_selected"], "n_inliers": r["n_inliers"],
+               "median_residual": r["median_residual"], "points": r["p0"][r["inliers"]], "score": None, "lost": r["M"] is None}
+        if r["M"] is None:
+            row["cum"] = cum
+            yield row
+            return
+        cum = r["M"] @ cum
+        row["cum"] = cum
+        if H is not None:
+            H = propagate_homography(H, to_native_motion(r["M"], w_native))
+            if refine is not None:
+                H, row["score"] = refine(cur, H)
+            row["H"] = H
+        prev = cur
+        yield row

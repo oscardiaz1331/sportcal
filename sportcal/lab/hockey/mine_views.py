@@ -3,7 +3,7 @@
 Written for the end-zone camera (behind the goal, looking down the rink): model A refuses or fails it, and the train
 set holds 4 such NHL frames (hockey.md section 14b). Views are told apart by the labelled frames: each labelled frame
 of the given videos is an "end" or a "side" reference by the angle of the rink's long axis in the image
-(`view_angle`), and every sampled video frame is scored by how much closer its thumbnail is to the nearest end
+(`core.camera.view_angle`), and every sampled video frame is scored by how much closer its thumbnail is to the nearest end
 reference than to the nearest side one. Around every frame scoring above --threshold, frames every --step s within
 --window s are queued (`click_labeler` labels a folder's queue.json in order).
 
@@ -20,20 +20,10 @@ from collections import defaultdict
 import cv2
 import numpy as np
 
+from sportcal.core.camera import view_angle
 from sportcal.lab.hockey.build_h_index import HOLDOUT_VIDEOS
 from sportcal.lab.hockey.build_h_index import OUT as INDEX
 from sportcal.paths import DATASETS, ROOT
-
-
-def view_angle(H, w, h):
-    """Angle in degrees (0-90) between the image horizontal and the rink's long axis, at the image centre: small for the
-    usual side camera, large when the camera looks down the length of the rink."""
-    H = np.asarray(H, float)
-    c = np.linalg.solve(H, [w / 2.0, h / 2.0, 1.0])
-    c = c[:2] / c[2]
-    a, b = (H @ [c[0], c[1], 1.0]), (H @ [c[0] + 0.5, c[1], 1.0])
-    d = b[:2] / b[2] - a[:2] / a[2]
-    return float(np.degrees(np.arctan2(abs(d[1]), abs(d[0]))))
 
 
 def _thumb(img):

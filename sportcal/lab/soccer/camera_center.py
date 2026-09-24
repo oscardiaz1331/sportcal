@@ -3,8 +3,9 @@
 A broadcast camera pans, tilts and zooms about a fixed centre, so once that centre is known a frame has only three
 unknowns (`FieldSolver.search_fixed_center`) and a couple of primitives are enough to solve it. The centre is estimated
 here: solve frames spread over the clip with the line-intersection solver, split each accepted homography into a pinhole
-pose (`core.camera.decompose_H`) and take the robust median of the centres. Frames with few primitives decompose to wild
-centres, so only well-scored, plausible, pinhole-consistent frames vote. Results: docs/experiments/soccer.md.
+pose (`core.camera.decompose_H`) and take the robust median of the centres (`core.camera.robust_centre`). Frames with
+few primitives decompose to wild centres, so only well-scored, plausible, pinhole-consistent frames vote. Results:
+docs/experiments/soccer.md.
 
     python -m sportcal.lab.soccer.camera_center --video soccer --n 16 --save
 """
@@ -43,20 +44,6 @@ def frame_centre(frame_bgr, min_score=0.6, max_mismatch=0.05):
             "score": best[0]["score"]}
 
 
-def robust_centre(centres, max_dev=4.0):
-    """(median centre, per-axis spread, number of votes) over an array of (n, 3) centres.
-
-    Votes farther than `max_dev` (world units) from the median of all are dropped once, then the median and the
-    median absolute deviation (scaled to a standard deviation) are recomputed on the rest."""
-    C = np.asarray(centres, float).reshape(-1, 3)
-    if len(C) == 0:
-        return None
-    keep = np.linalg.norm(C - np.median(C, axis=0), axis=1) <= max_dev
-    C = C[keep] if keep.any() else C
-    med = np.median(C, axis=0)
-    return med, 1.4826 * np.median(np.abs(C - med), axis=0), len(C)
-
-
 def calibrate(video, n=16, min_score=0.6, margin=0.03):
     """Solve `n` frames spread over the clip; returns (per-frame results, robust centre or None)."""
     cap = cv2.VideoCapture(str(LB.ROOT / (video + ".mp4")))
@@ -69,7 +56,7 @@ def calibrate(video, n=16, min_score=0.6, margin=0.03):
         r = None if img is None else frame_centre(img, min_score)
         results.append({"frame": int(f), "result": r})
     votes = [r["result"]["C"] for r in results if r["result"] is not None]
-    return results, (robust_centre(votes) if votes else None)
+    return results, (CAM.robust_centre(votes) if votes else None)
 
 
 def main():

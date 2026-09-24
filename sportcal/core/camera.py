@@ -145,3 +145,47 @@ def ptz_warp(H, w, h, pan=0.0, tilt=0.0, roll=0.0, zoom=1.0):
     Rz = np.array([[c(roll), -s(roll), 0], [s(roll), c(roll), 0], [0, 0, 1]])
     G = Kz @ Rz @ Rx @ Ry @ np.linalg.inv(K)
     return G, G @ np.asarray(H, float)
+
+
+def is_plausible_view(H, w, h, field_box, n=(25, 11)):
+    """False when no real camera can produce the field homography H: part of the field lies behind the camera AND H has
+    no valid focal length (`pinhole_residual`). field_box: (x0, x1, y0, y1), the world extent of the field.
+
+    A free 8-parameter H can fit its points while folding the plane through the horizon, so that, drawn, a line crosses a
+    circle. Neither sign alone is enough: a real camera panned along the field has part of it behind, and the focal length
+    of a real view is poorly conditioned when few primitives are seen (`decompose_H`), so correct hand labels with no valid
+    focal, or an implausibly short one, exist. Both together are the tell. Measured: docs/experiments/hockey.md section 14d.
+    ponytail: a sampled grid of the field box, not an exact horizon-vs-box test; a sliver behind the camera that falls
+    between samples goes unseen."""
+    H = np.asarray(H, float)
+    x0, x1, y0, y1 = field_box
+    X, Y = np.meshgrid(np.linspace(x0, x1, n[0]), np.linspace(y0, y1, n[1]))
+    z = X.ravel() * H[2, 0] + Y.ravel() * H[2, 1] + H[2, 2]
+    behind = bool((np.sign(z) != np.sign(np.median(z))).any())
+    return not (behind and pinhole_residual(H[None], w, h)[1][0] >= 1.0)
+
+
+def view_angle(H, w, h):
+    """Angle in degrees (0-90) between the image horizontal and the field's long axis (world X) at the image centre: small
+    for the usual side camera, large when the camera looks down the length of the field."""
+    H = np.asarray(H, float)
+    c = np.linalg.solve(H, [w / 2.0, h / 2.0, 1.0])
+    c = c[:2] / c[2]
+    a, b = (H @ [c[0], c[1], 1.0]), (H @ [c[0] + 0.5, c[1], 1.0])
+    d = b[:2] / b[2] - a[:2] / a[2]
+    return float(np.degrees(np.arctan2(abs(d[1]), abs(d[0]))))
+
+
+def robust_centre(centres, max_dev=4.0):
+    """(median centre, per-axis spread, number of votes) over an array of (n, 3) camera centres, or None when empty.
+
+    A fixed broadcast camera gives one centre per decomposed frame (`decompose_H`); frames with few primitives vote wild
+    centres. Votes farther than `max_dev` (world units) from the median of all are dropped once, then the median and the
+    median absolute deviation (scaled to a standard deviation) are recomputed on the rest."""
+    C = np.asarray(centres, float).reshape(-1, 3)
+    if len(C) == 0:
+        return None
+    keep = np.linalg.norm(C - np.median(C, axis=0), axis=1) <= max_dev
+    C = C[keep] if keep.any() else C
+    med = np.median(C, axis=0)
+    return med, 1.4826 * np.median(np.abs(C - med), axis=0), len(C)

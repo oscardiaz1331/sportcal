@@ -11,8 +11,8 @@ Simetria: el campo es igual bajo un giro de 180 grados (X,Y -> -X,-Y), asi que d
 etiquetados que difieren en ese giro dibujan las MISMAS lineas y solo cambia que area es
 la izquierda y que banda es la cercana. Igual que en hockey se canonicaliza: si la H sale
 con +Y hacia abajo (el usuario clico la banda cercana arriba) se aplica el giro, para que
-todas las etiquetas guardadas cumplan la convencion de arriba. El umbral de aviso de
-inestabilidad (sensibilidad > 30 px) esta HEREDADO de hockey, sin calibrar en futbol.
+todas las etiquetas guardadas cumplan la convencion de arriba. El aviso de inestabilidad
+(`core.geometry.click_sensitivity` > 30 px) es la misma medida que en hockey, calibrada alli y no en futbol.
 
 Salida (datasets/soccer_labels/, o $SOCCER_LABELS_DIR): images/<id>.jpg,
 labels/<id>.txt (YOLO-pose de 31 keypoints, PROVISIONAL: la caja es la de los puntos
@@ -32,6 +32,7 @@ import numpy as np
 from sportcal.core import camera as CAM
 from sportcal.core import circle as CIRC
 from sportcal.core import fitting as FIT
+from sportcal.core.geometry import click_sensitivity
 from sportcal.lab.soccer import field_solver as SF
 from sportcal.sports.soccer import field as FIELD
 
@@ -43,6 +44,7 @@ N_KP = len(KEYPOINTS)
 TPL = FIELD.KEYPOINT_COORDS
 NOMBRES = FIELD.KEYPOINT_NAMES
 _MUESTRAS, _ = FIELD.sample_template(1.0)      # puntos de las lineas, para comprobar que la plantilla cae en cuadro
+CAJA = (-HX, HX, -HY, HY)
 _ROT180 = np.diag([-1.0, -1.0, 1.0])
 
 
@@ -89,34 +91,20 @@ def _en_cuadro(Hn, w, h):
     return np.where(ok)[0]
 
 
-def sensibilidad(world, img_pts, Hn, w, h, sigma=2.0, n=24):
-    """Cuanto se mueve la plantilla DENTRO DEL FRAME (px a 1920, mediana) si cada clic
-    se desvia ~sigma px: se reajusta la H sobre clics perturbados y se compara la
-    proyeccion de las muestras de linea que caen en cuadro."""
-    idx = _en_cuadro(Hn, w, h)
-    if len(idx) < 5:
-        return float("inf")
-    P = _MUESTRAS[idx]
-    ref = _proj(Hn, P)
-    rng = np.random.default_rng(0)
-    sc = w / 1920.0
-    d = []
-    for _ in range(n):
-        noisy = np.asarray(img_pts, np.float64) + rng.normal(0, sigma * sc, np.shape(img_pts))
-        Hi, _ = cv2.findHomography(np.asarray(world, np.float32), noisy.astype(np.float32), 0)
-        if Hi is None or not np.all(np.isfinite(Hi)):
-            return float("inf")
-        d.append(np.linalg.norm(_proj(Hi / Hi[2, 2], P) - ref, axis=1) / sc)
-    d = np.concatenate(d)
-    return float(np.median(d[np.isfinite(d)])) if np.isfinite(d).any() else float("inf")
-
-
 def canonicaliza(H):
     """Giro de 180 grados del mundo si la H deja +Y hacia abajo en la imagen."""
     a = _proj(H, np.array([[0.0, 0.0], [0.0, 10.0]]))
     if a[1, 1] > a[0, 1]:
         return H @ _ROT180, True
     return H, False
+
+
+def _aviso_imposible(Hn, w, h, aviso):
+    """El aviso, precedido de uno de H imposible cuando ninguna camara real la da (`core.camera.is_plausible_view`)."""
+    if CAM.is_plausible_view(Hn, w, h, CAJA):
+        return aviso
+    return ("IMPOSIBLE: ninguna camara real da esta H (parte del campo quedaria detras de la camara y "
+            "ninguna focal la explica): revisa que no haya un punto mal asignado. " + (aviso or ""))
 
 
 def ajusta(world, img_pts, w, h=None):
@@ -146,7 +134,8 @@ def ajusta(world, img_pts, w, h=None):
     res = np.linalg.norm(_proj(Hn, world) - img_pts, axis=1) * 1920.0 / w
     Hc, giro = canonicaliza(Hn)
     aviso = None
-    sens = sensibilidad(world, img_pts, Hn, w, h if h else w * 9 / 16)
+    h = h if h else w * 9 / 16
+    sens = click_sensitivity(world, img_pts, Hn, w, h, CAJA)
     esperado = 0.42 * sens
     if sens > 30.0:
         aviso = ("Ajuste poco estable: con clics a ±2px la plantilla puede desviarse ~{:.0f}px dentro del "
@@ -155,7 +144,7 @@ def ajusta(world, img_pts, w, h=None):
     elif n == 4:
         aviso = ("con 4 puntos el ajuste es exacto (residuo 0); error esperado ~{:.0f}px: "
                  "revisa el dibujo o añade un 5o punto".format(esperado))
-    return Hc, [float(r) for r in res], giro, aviso, Hn
+    return Hc, [float(r) for r in res], giro, _aviso_imposible(Hn, w, h, aviso), Hn
 
 
 def ajusta_elipse(world, img_pts, elipse_pts, w, h=None):
@@ -182,7 +171,7 @@ def ajusta_elipse(world, img_pts, elipse_pts, w, h=None):
     if out["n_solutions"] > 1:
         aviso = ("AMBIGUO: {} homografias distintas encajan igual con estos clics; anade un punto que no este sobre la "
                  "linea central (una esquina o el punto de penalti). ".format(out["n_solutions"])) + aviso
-    return Hc, [float(r) for r in res], giro, aviso, Hn
+    return Hc, [float(r) for r in res], giro, _aviso_imposible(Hn, w, h if h else w * 9 / 16, aviso), Hn
 
 
 def procesa_gesto_elipse(pts, g, radio, tol_click):

@@ -110,3 +110,14 @@ def test_ransac_rejects_outliers_and_needs_four_points():
     _, inliers = G.fit_homography_ransac(world, img, 3.0)
     assert inliers[4:].all() and not inliers[:4].any()
     assert G.fit_homography_ransac(world[:3], img[:3], 3.0) == (None, None)
+
+
+def test_clustered_clicks_are_unstable_and_off_field_pixels_do_not_count():
+    def clicks(world):
+        return cv2.perspectiveTransform(np.float32(world)[None], H_TRUE)[0]
+    spread = np.vstack([WORLD_QUAD, [[30.0, 15.0]]])
+    cluster = np.array([[30.0, 15], [31, 15], [31, 16], [30, 16], [30.5, 15.5]])
+    box = (0.0, 60.0, 0.0, 30.0)
+    s, c = (G.click_sensitivity(p, clicks(p), H_TRUE, 1920, 1080, box) for p in (spread, cluster))
+    assert s < 5 and c > 100
+    assert G.click_sensitivity(spread, clicks(spread), H_TRUE, 1920, 1080, (500.0, 560.0, 0.0, 30.0)) == np.inf

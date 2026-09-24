@@ -36,6 +36,20 @@ follow-up pass. The previous layout is tagged `pre-restructure` (`git checkout p
 5. Delete the temporary copy `training/hockeyrink_pose_rp.yaml` once you decide not to `resume` run `yolo26m-18`
    (its `args.yaml` points there).
 6. Line endings: add a `.gitattributes` (`* text=auto eol=lf`) to silence the LF/CRLF warnings on Windows.
+7. **Sport-agnostic soccer lab code still to promote** (2026-09-24; the camera-level pieces already moved, see the table).
+   Each is general in its mechanism but written against the soccer template, the grass surface or Spanish names, and none
+   has been measured on another sport - move each when a second sport first uses it, with that sport's numbers:
+   * `lab/soccer/field_solver.py`: the fixed-centre PTZ search (`search_fixed_center`, `refine_ptz`), the pinhole
+     penalty inside the search and the coarse-to-fine tau cascade of `refine` - a core solver over any `Sport.polylines`;
+     `line_hypotheses` is where the soccer template (`X_LINES`, `Y_LINES`) is baked in.
+   * `lab/soccer/camera_center.py` (`frame_centre`, `calibrate`): calibrate a broadcast camera's fixed centre from rich
+     frames; needs the solver above and a per-sport "plausible camera position" box.
+   * `lab/soccer/gradient.py`: line detectors (`ransac_lineas`, `hough_lineas`, `fld_lineas`), pairing the two edges of a
+     painted line (`empareja`), its profile test (`perfil_linea`, `clasifica_pintada`), "surface on both sides"
+     (`cesped_lados`) and the ellipse detectors (`elipses_edgedrawing`, `elipses_find`, `elipse_circulo`) -> `core/fitting.py`
+     with a `surface` argument.
+   * `lab/soccer/lens_distortion.py` (`longest_line_points`, `fit_shared_k1`): one k1 pooled over a clip from line
+     straightness -> `core/camera.py`, once a k1 is shown to help (soccer.md section 16: not yet).
 
 ## Old path -> new path
 
@@ -52,6 +66,9 @@ follow-up pass. The previous layout is tagged `pre-restructure` (`git checkout p
 | `testing/soccer_labeler.py` `KEYPOINTS` (31 named points) | `sportcal/sports/soccer/field.py` (`KEYPOINTS`, `KEYPOINT_NAMES`, `KEYPOINT_COORDS`) |
 | `testing/soccer_field.py` camera math (`pose_a_H`, `proyecta`, `_bilineal`, `residuo_pinhole`, `consistente_pinhole`) | `sportcal/core/camera.py` (`pose_to_H`, `project`, `bilinear`, `pinhole_residual`, `is_pinhole_consistent`) |
 | `testing/soccer_field.py` `detecta_lineas` | `sportcal/core/fitting.py::detect_lines` |
+| `lab/soccer/camera_center.py::robust_centre`, `lab/hockey/mine_views.py::view_angle` (2026-09-24) | `sportcal/core/camera.py` (same names); new there: `is_plausible_view` |
+| `sensibilidad` of `lab/hockey/click_labeler.py` and `lab/soccer/labeler.py` (2026-09-24) | `sportcal/core/geometry.py::click_sensitivity` (the hockey measure, with the field box as argument; the soccer one used its line samples) |
+| `lab/soccer/camera_motion.py` `to_work`, `to_native_motion`, `grass_region`, `background_mask`, `field_mask`, `track_pair`, `track_video` (2026-09-24) | `sportcal/core/motion.py` (`grass_region` -> `surface_region(img, surface)`; the masks and `track_pair`/`track_video` take `surface`; `track_video(refine_taus=)` -> `refine=` callback). `camera_motion` keeps grass wrappers and `refine_on_lines` |
 | `testing/soccer_field.py` solver (`Campo`, `hipotesis_lineas`, `error_reproy`) | `sportcal/lab/soccer/field_solver.py` (`FieldSolver`, `line_hypotheses`, `reprojection_error`; methods `puntua/busca_pose/busca_lineas/busca_elipse/pon_evidencia/snap_esquinas/refina` -> `score/search_pose/search_lines/search_ellipse/set_evidence/snap_corners/refine`) |
 | `testing/soccer_eval.py`, `soccer_grad.py`, `soccer_labeler.py` | `sportcal/lab/soccer/{evaluation,gradient,labeler}.py` |
 | `testing/classical_cv_lab.py`, `color_spaces.py`, `samples/` | `sportcal/lab/common/` |

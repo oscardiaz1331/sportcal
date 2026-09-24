@@ -195,7 +195,10 @@ evidence are not comparable across candidates**.
 ## 6. Labelling tool - `lab/soccer/labeler.py`
 
 31 named keypoints (`sports/soccer/field.py::KEYPOINTS`) → H by least squares, canonicalised for the half-turn like hockey.
-The instability warning threshold (sensitivity > 30 px) is **inherited from hockey and uncalibrated for soccer**. Output is
+The instability warning (`core.geometry.click_sensitivity` > 30 px) is the hockey measure, **calibrated on hockey
+(hockey.md section 11), not on soccer**; until 2026-09-24 the soccer labeller measured it over its line samples instead of
+the image pixels on the field. It also warns when no camera can give the fit (`core.camera.is_plausible_view`, hockey.md
+section 14d; none of the 18 hand labels trips it). Output is
 YOLO-pose with 31 keypoints, provisional (no soccer training pipeline exists).
 
 ## 7. Environment trap

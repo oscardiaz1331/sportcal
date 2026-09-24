@@ -6,7 +6,7 @@ IIHF, the stored NHL ones are 11-22 px off), then fine-tune on the hand labels o
 
     python -m sportcal.lab.hockey.train_kpline --phase pretrain
     python -m sportcal.lab.hockey.train_kpline --phase finetune --init runs/kpline/pretrain/best_h.pt
-    python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune/best_h.pt --split test
+    python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune/best_h.pt --split test [--gate]
     python -m sportcal.lab.hockey.train_kpline --eval runs/hockeyrink/yolo26m-18/weights/best_homography.pt --yolo
     python -m sportcal.lab.hockey.train_kpline --phase pretrain --keypoints derived     # + circle points, section 14c
 
@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from sportcal.core.camera import ptz_warp
+from sportcal.core.camera import is_plausible_view, ptz_warp
 from sportcal.core.geometry import geom_error, line_through, solve_points_lines
 from sportcal.core.labels import heatmap_peaks, render_heatmaps
 from sportcal.lab.hockey.build_h_index import OUT as INDEX
@@ -43,6 +43,7 @@ KEYPOINT_SETS = {"base": rink.build_template,
                  "derived": lambda p: np.vstack([rink.build_template(p), rink.derived_keypoints(p)])}
 GRID = {k: np.stack(np.meshgrid(np.arange(0.0, p["length"] + 1e-9, 1.0), np.arange(0.0, p["width"] + 1e-9, 1.0)),
                     -1).reshape(-1, 2) for k, p in PARAMS.items()}
+BOX = {k: (0.0, p["length"], 0.0, p["width"]) for k, p in PARAMS.items()}
 # hand labels of training videos; test_leaky gives its frames to fine-tuning (the clean test set is `test`)
 FINETUNE_SPLITS = ("train", "test_leaky")
 
@@ -148,8 +149,9 @@ def estimate_H(heat, template, w0, kp, thr=0.3):
 
 
 @torch.no_grad()
-def evaluate(model, rows, device, kp, batch=4):
-    """Error px at 1920 against the label H, one per row (inf when no H comes out)."""
+def evaluate(model, rows, device, kp, batch=4, gate=False):
+    """Error px at 1920 against the label H, one per row (inf when no H comes out, or with `gate` when no real camera
+    gives it: `core.camera.is_plausible_view`)."""
     model.eval()
     errs = [np.inf] * len(rows)
     for x, _, idx in DataLoader(Frames(rows, augment=False, kp=kp), batch_size=batch, num_workers=2):
@@ -158,12 +160,12 @@ def evaluate(model, rows, device, kp, batch=4):
         for hm, i in zip(heat, idx.tolist()):
             r = rows[i]
             H = estimate_H(hm, r["template"], r["w"], kp)
-            if H is not None:
+            if H is not None and (not gate or is_plausible_view(H, r["w"], r["h"], BOX[r["template"]])):
                 errs[i] = geom_error(H, np.asarray(r["H"], float), GRID[r["template"]], r["w"], r["h"])
     return np.array(errs)
 
 
-def evaluate_yolo(weights, rows, device):
+def evaluate_yolo(weights, rows, device, gate=False):
     """The same errors for the 56-keypoint YOLO model, through the product estimator (one frame at a time). Its H is
     canonicalized first: YOLO was trained on labels with mixed mirror conventions (hockey.md section 0b), so the names
     of its points are not a fair part of the comparison."""
@@ -173,6 +175,8 @@ def evaluate_yolo(weights, rows, device):
     for r in rows:
         e = est.estimate(cv2.imread(str(ROOT / r["image"])))
         H = None if e is None else canonicalize(e.H, PARAMS[r["template"]])[0]
+        if H is not None and gate and not is_plausible_view(H, r["w"], r["h"], BOX[r["template"]]):
+            H = None
         errs.append(np.inf if H is None else
                     geom_error(H, np.asarray(r["H"], float), GRID[r["template"]], r["w"], r["h"]))
     return np.array(errs)
@@ -250,6 +254,7 @@ def main():
     ap.add_argument("--yolo", action="store_true", help="with --eval: the weights are a YOLO pose model (product path)")
     ap.add_argument("--keypoints", choices=tuple(KEYPOINT_SETS), default="base",
                     help="keypoint set to train (runs go to <phase>-derived); --eval reads it from the weights")
+    ap.add_argument("--gate", action="store_true", help="with --eval: refuse the H no real camera gives (section 14d)")
     args = ap.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rows = [json.loads(line) for line in open(INDEX, encoding="utf-8")]
@@ -258,13 +263,13 @@ def main():
         return
     rows = [r for r in rows if r["split"] == args.split and r["template"] == "hockey-nhl"]
     if args.yolo:
-        errs = evaluate_yolo(args.eval, rows, device)
+        errs = evaluate_yolo(args.eval, rows, device, args.gate)
     else:
         state = torch.load(args.eval, map_location=device)
         kp = next(keypoints(k) for k in KEYPOINT_SETS if n_channels(keypoints(k)) == state["final.1.weight"].shape[0])
         model = HalfResUNet(ncls=n_channels(kp)).to(device)
         model.load_state_dict(state)
-        errs = evaluate(model, rows, device, kp)
+        errs = evaluate(model, rows, device, kp, gate=args.gate)
     for r, e in zip(rows, errs):
         print("{:<40} {:>8.1f}".format(r["id"], e))
     for v in sorted({r["video"] for r in rows}):

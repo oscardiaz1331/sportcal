@@ -125,3 +125,31 @@ def test_ptz_warp_is_the_same_camera_turned_and_zoomed():
         want = C.pose_to_H(p, W, H)[0]
         assert np.allclose(H1 / H1[2, 2], want / want[2, 2], rtol=1e-6, atol=1e-6), (dtilt, zoom)
         assert np.allclose(G @ H0, H1)
+
+
+def test_only_a_field_folded_through_the_horizon_with_no_focal_is_implausible():
+    """Each sign alone happens in real views: a side camera at pan 0 has no measurable focal, a camera panned along the
+    rink has part of it behind. Only both together - here a free H that folds the plane - is refused."""
+    w, h, box = 1920, 1080, (0.0, 61.0, 0.0, 26.0)
+    corners = np.array([[x, y] for x in box[:2] for y in box[2:]])
+    side = C.pose_to_H(np.array([[30.5, -20.0, 15.0, 0.0, np.radians(25), 1500.0]]), w, h)[0]
+    panned = C.pose_to_H(np.array([[30.5, -20.0, 15.0, np.radians(80), np.radians(10), 1500.0]]), w, h)[0]
+    fold = np.array([[1.0, 0, 0], [0, 1, 0], [0.05, 0, -1]])
+    assert C.pinhole_residual(side[None], w, h)[1][0] == 1.0 and (C.project(side[None], corners)[1] > 0).all()
+    assert (C.project(panned[None], corners)[1] < 0).any() and C.pinhole_residual(panned[None], w, h)[1][0] < 1e-9
+    assert C.is_plausible_view(side, w, h, box) and C.is_plausible_view(panned, w, h, box)
+    assert not C.is_plausible_view(fold, w, h, box)
+
+
+def test_view_angle_tells_the_side_camera_from_the_end_zone_camera():
+    """The rink's long axis runs across the image for the side camera and up it for a camera behind the goal."""
+    L, Wd, w, h = 61.0, 26.0, 1920, 1080
+    side = C.pose_to_H(np.array([[L / 2, -20.0, 15.0, 0.0, np.radians(25), 1500.0]]), w, h)[0]
+    end = C.pose_to_H(np.array([[-12.0, Wd / 2, 10.0, np.radians(90), np.radians(20), 1500.0]]), w, h)[0]
+    assert C.view_angle(side, w, h) < 20 and C.view_angle(end, w, h) > 70
+
+
+def test_robust_centre_drops_a_wild_vote():
+    votes = np.array([[-3.3, -67.9, 13.3], [-3.2, -68.0, 13.4], [-3.4, -67.8, 13.2], [30.3, -34.2, 5.6]])
+    centre, spread, n = C.robust_centre(votes)
+    assert n == 3 and np.allclose(centre, [-3.3, -67.9, 13.3], atol=0.11) and (spread < 0.3).all()

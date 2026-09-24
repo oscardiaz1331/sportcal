@@ -114,13 +114,6 @@ def test_fixed_centre_result_is_an_exact_pinhole_camera_at_that_centre(scenes):
     assert d["mismatch"] < 1e-6 and np.allclose(d["C"], pose["C"], atol=1e-4)
 
 
-def test_robust_centre_drops_a_wild_vote():
-    from sportcal.lab.soccer.camera_center import robust_centre
-    votes = np.array([[-3.3, -67.9, 13.3], [-3.2, -68.0, 13.4], [-3.4, -67.8, 13.2], [30.3, -34.2, 5.6]])
-    centre, spread, n = robust_centre(votes)
-    assert n == 3 and np.allclose(centre, [-3.3, -67.9, 13.3], atol=0.11) and (spread < 0.3).all()
-
-
 @pytest.mark.slow
 def test_ellipse_fixed_center_recovers_a_ptz_pose_with_no_mask_and_no_clicks():
     from sportcal.core.camera import decompose_H, pose_to_H

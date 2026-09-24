@@ -349,6 +349,14 @@ DLT on random frames: coverage 0% (reference) / 4% with garbage H (UDA). YOLO: s
 | `python training/make_line_masks.py [--overlay N]`, `gen_synthetic_lines.py` | same names under `sportcal.lab.hockey` |
 | `python training/build_val_nhl.py`, click labeler app | `sportcal.lab.hockey.build_val_nhl`; `streamlit run sportcal/lab/common/annotate_val_app.py` |
 
+Click labeller warnings (`click_labeler.ajusta`; the soccer labeller uses the same measure): the fit is flagged
+unstable when `core.geometry.click_sensitivity` (median px at 1920 that the drawn rink moves when every click is ~2 px
+off, over the image pixels that fall on the rink +-2 m) exceeds 30. Calibrated against known truth on 352
+configurations of 4 random points over 19 val frames: real error ~0.42 x sensitivity (median; p90 ~1.2x); the threshold
+warns on 56% of those configurations, and of the ones it does not warn on only 6% are > 15 px off. A first version
+averaged over the whole image and warned on 91-100% of fits even at 7 px real error: stands and horizon blow up with
+any fit. The "IMPOSIBLE" warning is the plausibility gate of section 14d.
+
 GPU note: an 8 GB card (RTX 3060 Ti) cannot run a pose training (~7.8 GB at imgsz 1024) and any other model
 at once; check `nvidia-smi` before running `rink_metric` or the auto-labellers.
 
@@ -370,7 +378,8 @@ at once; check `nvidia-smi` before running `rink_metric` or the auto-labellers.
    not more epochs.
 3. A larger independent val: keep annotating `valh` (`sportcal/lab/common/annotate_val_app.py`) and consider using the
    hand-labelled frames (2 px, best labels that exist) as **train** for hard cases with a per-video split.
-4. Reject wrong-geometry frames (nhl6, nhl9 class of failure) automatically: nothing measured does it yet.
+4. Reject wrong-geometry frames (nhl6, nhl9 class of failure) automatically: the plausibility gate (section 14d) refuses
+   the homographies no camera gives; a wrong but camera-like H still goes through.
 
 ## 14. Keypoint + line model for NHL ("model A") - `lab/hockey/train_kpline.py`
 
@@ -474,7 +483,7 @@ training frames of that kind) and sparse views (refused, not wrong).
 something else?
 **Method:** for the 26 `test` frames model A (fine-tune) refuses or misses by > 50 px, count what the hand label puts in
 frame: template keypoints, straight lines, circles with > 25% of their arc in view; compare with the keypoints the model
-finds above 0.3. `mine_views.view_angle` (angle of the rink's long axis in the image) separates the side camera from a
+finds above 0.3. `core.camera.view_angle` (angle of the rink's long axis in the image) separates the side camera from a
 camera behind the goal.
 **Result:**
 
@@ -511,3 +520,46 @@ the comparison isolates the keypoints; the end-view labels of 14b go into a late
     python -m sportcal.lab.hockey.train_kpline --phase pretrain --keypoints derived
     python -m sportcal.lab.hockey.train_kpline --phase finetune --keypoints derived --init runs/kpline/pretrain-derived/best_h.pt
     python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune-derived/best_h.pt --split test
+
+## 14d. Homographies no camera can produce: a plausibility gate - `core.camera.is_plausible_view` (2026-09-24)
+
+**Question:** an overlay showed a rink line crossing a faceoff circle: impossible for a real camera, easy for a free
+8-parameter H. Is "physically impossible" a usable sign of a wrong H, for model answers and for hand labels?
+**Signs:** (a) part of the rink behind the camera - the homogeneous depth (third row of H) changes sign over a 25 x 11
+grid of the rink; drawn, that part comes back mirrored across the horizon, which is the line through the circle;
+(b) no valid focal length - `pinhole_residual` finds none between 0.4 and 8 image widths (mismatch 1).
+**Result:** model A fine-tune, its 72 answers on `test` + `test_leaky` (12 of them > 50 px), and the hand labels of the
+same 86 frames:
+
+| sign | answers > 50 px | answers <= 50 px | hand labels |
+|---|---|---|---|
+| part of the rink behind | 12/12 | 15/60 | 31/86 |
+| no valid focal | 11/12 | 7/60 | 18/86 |
+| **both** (the gate) | **11/12** | **0/60** | **0/86** |
+| focal < 0.8 widths (rejected) | 1/12 | 0/60 | 6/86 |
+
+Neither sign alone works because real views show each: a side camera at pan ~0 has the rink's long axis parallel to the
+image plane and no measurable focal (the orthogonality equation divides by zero), and a camera panned along the rink has
+part of it behind. Together they are the fold. A minimum focal would catch the one gross answer the gate misses (nhl9
+frame 8160, f = 0.44 widths, part of the rink behind) but refuses 6 correct nhl4 hand labels (0.34-0.66 widths): the
+focal of a real view is too poorly conditioned to bound.
+
+With the gate (`train_kpline --eval <weights> --gate`), model A fine-tune:
+
+| set | coverage | p50 | p90 | > 50 px | < 25 px (of all frames) |
+|---|---|---|---|---|---|
+| test (63), no gate | 78% | 9.2 | 639 | 12 | 59% |
+| test (63), gate | 60% | 6.9 | 16.8 | 1 | 59% |
+| test + test_leaky (86), no gate | 84% | 8.3 | 510 | 12 | 66% |
+| test + test_leaky (86), gate | 71% | 7.2 | 18.8 | 1 | 66% |
+
+It refuses no answer under 25 px. Per video on `test`: nhl10 stays at 100%; nhl4 59% -> 47% (its 2 gross answers);
+nhl9 65% -> 20% (9 of its 10 gross answers). Over the whole index it refuses 0 of the 116 hand labels and 11 of the 1338
+stored ones: 4 `auto_seg` (nhl7 frames 9725, 9895, 10770; nhl8 2130), 5 `nhl_prior` (clip 810, 1020, 1110; clip2 180 in
+dev; nhl4 1800, excluded) and 2 IIHF - 9 train and 1 dev label that no camera gives. None of the 18 soccer hand labels
+trips it (`datasets/soccer_labels`, field box +-52.5 x +-34 m).
+
+**Decision:** the gate is an evaluation option (`--gate`; checkpoints are still chosen ungated) and a warning in both
+click labellers ("IMPOSIBLE", not a block). It has no tuned threshold, only a physical rule, but it was checked on these
+test frames only: confirm it on new frames before a product stage relies on it. At the next index rebuild (after B1),
+drop the 10 train/dev labels it refuses.

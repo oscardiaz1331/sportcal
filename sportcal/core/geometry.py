@@ -279,3 +279,41 @@ def solve_points_lines(world_pts, img_pts, world_lines, img_lines, ref_world, re
         q = np.c_[wp, np.ones(len(wp))] @ H.T
         return np.median(np.linalg.norm(q[:, :2] / q[:, 2:] - ip, axis=1))
     return H_joint if resid(H_joint) <= resid(H_pts) + ransac_px / 2 else H_pts
+
+
+def click_sensitivity(world, img_pts, H, w, h, field_box, sigma=2.0, n=24, margin=2.0):
+    """How far the field drawn by a hand-clicked H moves inside the frame (median px at REF_WIDTH) when every click is
+    off by ~sigma px: a grid of image pixels that H puts on the field (field_box (x0, x1, y0, y1) grown by `margin`
+    world units) is sent to the world with H and back with Hs refitted on jittered clicks. inf when the fit is unusable.
+
+    What matters is whether the fit is stable where the field is seen, not how much of the field the clicks span (a close
+    view only shows a small patch). Stands and horizon pixels are left out: every fit blows up there and nothing is drawn."""
+    x0, x1, y0, y1 = field_box
+    sc = w / REF_WIDTH
+    gx, gy = np.meshgrid(np.linspace(0.05 * w, 0.95 * w, 14), np.linspace(0.05 * h, 0.95 * h, 9))
+    G = np.c_[gx.ravel(), gy.ravel()]
+
+    def proj(M, P):
+        q = np.c_[P, np.ones(len(P))] @ M.T
+        return q[:, :2] / q[:, 2:]
+    try:
+        with np.errstate(all="ignore"):
+            Wg = proj(np.linalg.inv(np.asarray(H, float)), G)
+    except np.linalg.LinAlgError:
+        return float("inf")
+    on = (np.isfinite(Wg).all(1) & (Wg[:, 0] > x0 - margin) & (Wg[:, 0] < x1 + margin)
+          & (Wg[:, 1] > y0 - margin) & (Wg[:, 1] < y1 + margin))
+    if on.sum() < 4:
+        return float("inf")
+    G, Wg = G[on], Wg[on]
+    rng = np.random.default_rng(0)
+    d = []
+    for _ in range(n):
+        noisy = np.asarray(img_pts, np.float64) + rng.normal(0, sigma * sc, np.shape(img_pts))
+        Hi, _ = cv2.findHomography(np.asarray(world, np.float32), noisy.astype(np.float32), 0)
+        if Hi is None or not np.all(np.isfinite(Hi)):
+            return float("inf")
+        with np.errstate(all="ignore"):
+            d.append(np.linalg.norm(proj(Hi, Wg) - G, axis=1) / sc)
+    d = np.concatenate(d)
+    return float(np.median(d[np.isfinite(d)])) if np.isfinite(d).any() else float("inf")

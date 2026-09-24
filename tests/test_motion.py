@@ -131,3 +131,19 @@ def test_a_weakly_supported_fit_is_rejected():
     assert unguarded["M"] is not None and 8 <= unguarded["n_inliers"] < 30
     guarded = motion.estimate_motion(img0, img1, mask=few, max_corners=22)
     assert guarded["M"] is None
+
+
+def test_track_video_chains_the_homography_through_native_frames():
+    """Frames are windows sliding over one bigger scene (a pure pan): after the steps, H must be the start H followed by
+    the total shift in NATIVE pixels, though tracking runs at the working width."""
+    big = cv2.cvtColor(cv2.resize(_scene(3), (1600, 900)), cv2.COLOR_GRAY2BGR)
+    dx, dy = 6, 2                                     # native px per frame index
+
+    def get_frame(i):
+        return big[50 - i * dy:50 - i * dy + 720, 100 - i * dx:100 - i * dx + 1280] if i <= 12 else None
+    H0 = np.array([[20.0, 3.0, 200.0], [0.5, -9.0, 600.0], [0.0, 0.002, 1.0]])
+    rows = list(motion.track_video(get_frame, 0, H0, "ice", step=3, n=5, region_kind="all"))
+    assert [r["frame"] for r in rows] == [0, 3, 6, 9, 12] and not any(r["lost"] for r in rows)
+    world = np.array([[0.0, 0.0], [30.0, 10.0], [60.0, 25.0]])
+    want = motion.apply_motion(H0, world) + [12 * dx, 12 * dy]
+    assert np.abs(motion.apply_motion(rows[-1]["H"], world) - want).max() < 0.5
