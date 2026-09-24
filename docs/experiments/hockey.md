@@ -505,7 +505,7 @@ little diversity: new NHL games (`fetch_clips`) are the real source.
 
     python -m sportcal.lab.hockey.mine_views          # -> datasets/hockeyrink_nhl_endview/queue.json
 
-## 14c. Keypoints derived from the circles ("model B1") - `train_kpline --keypoints derived` (pipeline ready, not trained)
+## 14c. Keypoints derived from the circles ("model B1") - `train_kpline --keypoints derived`
 
 **Question:** do PnLCalib-style derived keypoints make model A more precise or more robust where it already answers?
 Section 14b says they are not the fix for the refused views; this measures what they add on the rest.
@@ -584,6 +584,12 @@ clicks within 1-6 px).
 Background-only is best on nhl7 (2-3 px on the grid) but misses some clip pairs by 78-91 px; the whole frame never
 fails badly. Labelling one frame in three and carrying it to the other two gives ~5-8 px, worst ~20: better than the stored
 train labels (median 11-22 px, section 0b), not good enough for test. Three shots of one camera type.
+**In the labeller** (`click_labeler.propaga`, 2026-09-24): opening a hockey frame proposes the saved label of the same
+video nearest before and after it (<= 2 s), carried with the whole-frame motion every 5 frames; "Aceptar la propuesta"
+fixes it with 6 spread points (drags still move the fit). Leave-one-out on the 28 end-view labels then saved: the nearest
+proposal lands p50 5.8 px from the frame's own clicks, max 34.9 (clip frame 270 from 300); ~2 s per proposal. A saved
+proposal is recorded (`"origen"` in clicks.jsonl) and `build_h_index` gives it source `propagated`: train, or excluded
+for a held-out video - never test, and not in the hand-only fine-tune.
 
 **Claude clicking - method:** one labelled frame (nhl7 frame 9750, 7 hand clicks) clicked by Claude from zoomed crops
 with a pixel grid before seeing the hand label; one unlabelled frame (clip frame 990, a glass-level centre-ice view)

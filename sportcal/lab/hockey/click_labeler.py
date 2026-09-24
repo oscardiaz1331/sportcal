@@ -27,6 +27,7 @@ from sportcal.paths import ROOT
 from sportcal.lab.hockey import make_line_masks as MM
 from sportcal.lab.hockey import relabel_reproject as RP
 from sportcal.sports.hockey import rink
+from sportcal.core import motion as MOT
 from sportcal.core.camera import is_plausible_view
 from sportcal.core.geometry import click_sensitivity
 from sportcal.core.labels import label_from_H  # noqa: E402
@@ -147,8 +148,9 @@ def procesa_gesto(pts, sel, proy, g, radio, tol_click):
     return pts, sel, "Elige antes un punto en el minimapa (o arrastra un marcador naranja)."
 
 
-def guarda(frame_bgr, cid, H, params, clics):
-    """Escribe imagen + etiqueta de 56 keypoints en datasets/hockeyrink_nhl_valh/."""
+def guarda(frame_bgr, cid, H, params, clics, origen=None):
+    """Escribe imagen + etiqueta de 56 keypoints en datasets/hockeyrink_nhl_valh/. `origen`: de donde salio la H si no
+    es solo de clics (p. ej. aceptada de `propaga`); queda en clicks.jsonl para no confundirla con una etiqueta a mano."""
     tpl = rink.build_template(params)
     h, w = frame_bgr.shape[:2]
     lab = label_from_H(H, tpl, w, h)
@@ -160,7 +162,8 @@ def guarda(frame_bgr, cid, H, params, clics):
     cv2.imwrite(str(OUT / "images" / "val" / (cid + ".jpg")), frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
     RP.write_label(OUT / "labels" / "val" / (cid + ".txt"), 0, box, kpts)
     with open(OUT / "clicks.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps({"id": cid, "clics": clics, "H": np.asarray(H).tolist()}) + "\n")
+        f.write(json.dumps({"id": cid, "clics": clics, "H": np.asarray(H).tolist(),
+                            **({"origen": origen} if origen else {})}) + "\n")
     return True, "guardado {}".format(cid)
 
 
@@ -224,9 +227,71 @@ def lee_frame(v, i):
     for p in (ROOT / "datasets" / "hockeyrink_nhl" / "images").glob("*/{}_*.jpg".format(v)):
         if int(p.stem.rsplit("_", 1)[1]) == i:
             return cv2.imread(str(p))
-    path = ROOT / (v + ".mp4")
-    cap = cv2.VideoCapture(str(path if path.exists() else ROOT / (v + ".mp4.webm")))   # clip is a .webm
+    cap = cv2.VideoCapture(str(_video(v)))
     cap.set(cv2.CAP_PROP_POS_FRAMES, i)
     ok, fr = cap.read()
     cap.release()
     return fr if ok else None
+
+
+def _video(v):
+    path = ROOT / (v + ".mp4")
+    return path if path.exists() else ROOT / (v + ".mp4.webm")    # clip is a .webm
+
+
+def etiquetas():
+    """{frame id: H} de las etiquetas guardadas en OUT (la ultima de cada frame)."""
+    p = OUT / "clicks.jsonl"
+    return {d["id"]: d["H"] for d in map(json.loads, open(p, encoding="utf-8"))} if p.exists() else {}
+
+
+def propaga(v, i, frame_i, max_s=2.0, paso=5):
+    """Propuestas de H para el frame i del video v: la etiqueta guardada mas cercana ANTES y DESPUES (a <= max_s), llevada
+    hasta i encadenando el movimiento de camara de todo el frame (`core.motion.track_video`, region "all": la que mejor
+    fue en hockey.md seccion 14e) cada `paso` frames. [{"H", "via", "texto"}], la mas cercana primero; vacia si no hay
+    etiqueta cerca o el seguimiento se pierde (corte de plano).
+
+    Los frames se leen en secuencia desde un salto al primero; si el primero o el ultimo no son los pixeles que el
+    etiquetador guardo o muestra (el salto de CAP_PROP_POS_FRAMES cayo en otro frame), no se propone nada."""
+    cap = cv2.VideoCapture(str(_video(v)))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    fuentes = {int(c.rsplit("_", 1)[1]): np.asarray(H, float) for c, H in etiquetas().items() if c.rsplit("_", 1)[0] == v}
+    antes = [f for f in fuentes if i - max_s * fps <= f < i]
+    despues = [f for f in fuentes if i < f <= i + max_s * fps]
+    out = []
+    for s in sorted(([max(antes)] if antes else []) + ([min(despues)] if despues else []), key=lambda f: abs(f - i)):
+        gap = abs(i - s)
+        step = max(d for d in range(1, paso + 1) if gap % d == 0)
+        lo = min(s, i)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, lo)
+        frames = {}
+        for f in range(lo, lo + gap + 1):
+            ok, img = cap.read()
+            if not ok:
+                break
+            if (f - lo) % step == 0:
+                frames[f] = MOT.to_work(img)
+        ref = cv2.imread(str(OUT / "images" / "val" / "{}_{:06d}.jpg".format(v, s)))
+        if len(frames) != gap // step + 1 or any(r is not None and np.abs(frames[f].astype(float) - MOT.to_work(r)).mean() > 4
+                                                 for f, r in ((s, ref), (i, frame_i))):
+            continue
+        S = np.diag([MOT.W_WORK / float(frame_i.shape[1])] * 2 + [1.0])
+        last = list(MOT.track_video(frames.get, s, S @ fuentes[s], "ice", step=step if i > s else -step, n=gap // step,
+                                    region_kind="all"))[-1]
+        if last["frame"] == i and not last["lost"]:
+            H = np.linalg.inv(S) @ last["H"]
+            out.append({"H": H / H[2, 2], "via": "{}_{:06d}".format(v, s),
+                        "texto": "llevada desde el frame {} ({:+.1f} s)".format(s, (s - i) / fps)})
+    cap.release()
+    return out
+
+
+def repartidos(proy, n=6):
+    """n de los puntos propuestos {k: (x, y)} bien repartidos por el frame (el mas lejano a los ya elegidos, cada vez):
+    fijan la propuesta igual que todos, pero un arrastre posterior sigue moviendo el ajuste."""
+    ks = list(proy)
+    P = np.array([proy[k] for k in ks], float)
+    sel = [int(np.argmax(np.linalg.norm(P - P.mean(0), axis=1)))]
+    while len(sel) < min(n, len(ks)):
+        sel.append(int(np.argmax(np.linalg.norm(P[:, None] - P[sel][None], axis=2).min(1))))
+    return {ks[j]: proy[ks[j]] for j in sel}

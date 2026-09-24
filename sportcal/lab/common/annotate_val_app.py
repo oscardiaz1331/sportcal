@@ -40,6 +40,9 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 
 from sportcal.paths import ROOT
 
+from sportcal.core import camera as CCAM
+from sportcal.core import geometry as CGEO
+from sportcal.core import motion as CMOT
 from sportcal.lab.hockey import click_labeler as CL
 from sportcal.lab.soccer import camera_motion as SCM
 from sportcal.lab.soccer import evaluation as SEV
@@ -53,9 +56,9 @@ from sportcal.sports.hockey import rink
 # en un servidor abierto hasta reiniciarlo. Recargarlos aqui cuesta milisegundos. El orden
 # importa (cada uno depende del anterior): soccer_labeler usa soccer_eval, que usa soccer_field;
 # soccer_eval se importa aqui aunque la app no lo llame, porque soccer_labeler lo carga perezoso
-# y sin recargarlo se quedaria con la version vieja.
+# y sin recargarlo se quedaria con la version vieja. Los de core/ van primero: los de lab/ importan nombres de ellos.
 import importlib  # noqa: E402
-for _m in (CL, SFD, SEV, SGR, SLB, SCM):
+for _m in (CCAM, CGEO, CMOT, CL, SFD, SEV, SGR, SLB, SCM):
     importlib.reload(_m)
 
 PARAMS = rink.RINK_NHL
@@ -65,6 +68,12 @@ W_MINI = 860
 SCALE_MINI = 13
 
 st.set_page_config(page_title="Etiquetador por clics", layout="wide")
+
+
+@st.cache_data(max_entries=8, show_spinner="llevando la pista desde el frame etiquetado mas cercano (unos segundos)...")
+def propuesta_hockey(_fr, v, i, n_etiquetas):
+    """`CL.propaga`, cacheada por frame y por cuantas etiquetas hay (una nueva puede ser la mas cercana)."""
+    return CL.propaga(v, i, _fr)
 
 
 @st.cache_data(max_entries=4, show_spinner=False)
@@ -146,9 +155,11 @@ DEPORTES = {
         ajusta=lambda world, pts, w, h: CL.ajusta(world, pts, PARAMS, w, h),
         pendientes=lambda Hraw, pts, w, h: CL.proyecta_pendientes(Hraw, TPL, pts, w, h),
         dibuja=lambda vis, H, col, grosor: rink.draw_rink(vis, H, PARAMS, col, grosor),
-        guarda=lambda fr, cid, H, clics: CL.guarda(fr, cid, H, PARAMS, clics),
-        salta=CL.marca_saltado, sugiere=None, msg_giro="espejo en x aplicado (zona A a la izquierda)",
-        ayuda="**Como se usa**\n\n1. Clic en un punto del **minimapa** (se pone en rojo).\n"
+        guarda=lambda fr, cid, H, clics, origen=None: CL.guarda(fr, cid, H, PARAMS, clics, origen),
+        salta=CL.marca_saltado, sugiere=propuesta_hockey, msg_giro="espejo en x aplicado (zona A a la izquierda)",
+        ayuda="**Como se usa**\n\n0. Si hay un frame etiquetado del mismo video a menos de 2 s, la pista llega ya "
+              "puesta en azul: si encaja, **Aceptar la propuesta** y **Guardar**; si no, arrastra los marcadores naranja.\n"
+              "1. Clic en un punto del **minimapa** (se pone en rojo).\n"
               "2. Clic en ese mismo punto en el **frame**.\n3. Repite con 4-8 puntos bien repartidos.\n"
               "4. Con >=4 puntos aparece la plantilla en amarillo: si encaja, **Guardar**.\n\n"
               "Si el frame no es de pista, **Saltar**."),
@@ -159,7 +170,7 @@ DEPORTES = {
         ajusta=lambda world, pts, w, h: SLB.ajusta(world, pts, w, h),
         pendientes=lambda Hraw, pts, w, h: SLB.proyecta_pendientes(Hraw, pts, w, h),
         dibuja=lambda vis, H, col, grosor: SLB.dibuja_plantilla(vis, H, col, grosor),
-        guarda=lambda fr, cid, H, clics: SLB.guarda(fr, cid, H, clics),
+        guarda=lambda fr, cid, H, clics, origen=None: SLB.guarda(fr, cid, H, clics),
         salta=SLB.marca_saltado, sugiere=SLB.sugiere, msg_giro="giro de 180° aplicado (banda cercana abajo)",
         ayuda="**Como se usa**\n\n1. (Opcional) **Sugerir plantilla**: el solver propone una H; arrastra "
               "los marcadores naranja a su sitio.\n2. O clic en un punto del **minimapa** y luego en "
@@ -179,7 +190,7 @@ if "frames" in ss and "deporte" not in ss:      # sesion abierta antes de que ex
 
 
 def nuevo_frame():
-    ss.pts, ss.sel, ss.msg, ss.cands = {}, None, None, []
+    ss.pts, ss.sel, ss.msg, ss.cands, ss.origen = {}, None, None, [], None
     ss.ell = []            # points clicked on the outline of the centre circle (soccer)
     ss.ver += 1
 
@@ -251,24 +262,37 @@ if deporte == "futbol":       # fixed camera centre calibrated for this clip (py
 if D.sugiere is not None:
     cs1, cs2 = st.columns([1, 3])
     with cs1:
-        if st.button("Sugerir plantilla (~15 s)"):
+        if deporte == "hockey":
+            ss.cands = D.sugiere(fr, v, i, len(CL.etiquetas()))
+            if not ss.cands:
+                st.caption("Sin propuesta: no hay frame etiquetado de este vídeo a menos de 2 s (o el seguimiento se perdió).")
+        elif st.button("Sugerir plantilla (~15 s)"):
             with st.spinner("buscando H (intersecciones + chamfer + elipse; ~40 s la primera vez)..."):
-                ss.cands = D.sugiere(fr, detector_personas(), ss.get("g_det", "auto"), centro_fijo) if deporte == "futbol" else D.sugiere(fr)
+                ss.cands = D.sugiere(fr, detector_personas(), ss.get("g_det", "auto"), centro_fijo)
             ss.ver += 1
             st.rerun()
     with cs2:
         if ss.cands:
-            opc = ["ninguna"] + ["{} (puntuacion {:.2f})".format(c["via"], c["score"]) for c in ss.cands]
-            st.caption("Evidencia usada: {}. La puntuacion incluye elipse y esquinas cuando las hay, por eso puede pasar de 1.".format(
-                ss.cands[0].get("nota", "-")))
-            elegida = st.radio("Sugerencia", opc, horizontal=True, key="cand_" + cid)
+            opc = ["ninguna"] + [c.get("texto") or "{} (puntuacion {:.2f})".format(c["via"], c["score"]) for c in ss.cands]
+            if deporte == "futbol":
+                st.caption("Evidencia usada: {}. La puntuacion incluye elipse y esquinas cuando las hay, por eso puede pasar de 1.".format(
+                    ss.cands[0].get("nota", "-")))
+            elegida = st.radio("Sugerencia", opc, index=1 if deporte == "hockey" else 0, horizontal=True, key="cand_" + cid)
             if elegida != "ninguna":
-                semilla = ss.cands[opc.index(elegida) - 1]["H"]
-                if ss.cands[opc.index(elegida) - 1]["score"] < 0.3:
+                cand = ss.cands[opc.index(elegida) - 1]
+                semilla = cand["H"]
+                if cand.get("score", 1.0) < 0.3:
                     st.caption("Puntuacion baja: en planos cercanos/sin lineas suele ser basura; "
                                "si el frame no es un plano general, mejor Saltar.")
     if semilla is not None and H is None:
         proy = D.pendientes(semilla, pts, w, h)
+        if deporte == "hockey" and len(proy) >= 4 and st.button("Aceptar la propuesta", key="aceptar",
+                                                              help="Fija la propuesta con 6 de sus puntos bien repartidos; si alguno "
+                                                                   "no encaja, arrástralo antes de guardar. Si está lejos, no la "
+                                                                   "aceptes: arrastra 4 o más marcadores naranja a su sitio."):
+            ss.pts, ss.origen = CL.repartidos(proy), "propagada desde " + cand["via"]
+            ss.ver += 1
+            st.rerun()
 
 # ---------------------------------------------------------------- minimapa
 def dibuja_minimapa(pts, sel):
@@ -399,7 +423,7 @@ with c2:
         clics = {str(k): [float(pts[k][0]), float(pts[k][1])] for k in ids}
         if deporte == "futbol" and ss.ell:
             clics["elipse"] = [[float(x), float(y)] for x, y in ss.ell]
-        ok, msg = D.guarda(fr, cid, H, clics)
+        ok, msg = D.guarda(fr, cid, H, clics, ss.get("origen"))
         if ok:
             ss.pos += 1
             nuevo_frame()

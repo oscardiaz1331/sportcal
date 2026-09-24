@@ -63,8 +63,11 @@ def video_of(stem):
     return (m.group(1), int(m.group(2))) if m else ("shl", None)
 
 
-def split_of(dataset, orig_split, video, hand=False):
-    """Per-video split: a held-out video only ever lands in the test sets (a hand label from it is a test frame)."""
+def split_of(dataset, orig_split, video, hand=False, propagated=False):
+    """Per-video split: a held-out video only ever lands in the test sets (a hand label from it is a test frame). A label
+    the click labeller carried from another one (`click_labeler.propaga`) is never a test frame."""
+    if propagated:
+        return "excluded" if video in HOLDOUT_VIDEOS else "train"
     if dataset == HAND:
         return "test" if video in HOLDOUT_VIDEOS else "test_leaky"
     if dataset in EXTRA:
@@ -80,11 +83,13 @@ def _size(img):
 
 
 def _hand_labels(dataset):
-    """{(video, frame): H} from a click-labelled dataset; a re-saved frame keeps its last H."""
+    """{(video, frame): (H, source)} from a click-labelled dataset; a re-saved frame keeps its last H. source is
+    "propagated" when the saved H was a proposal carried from another label (the labeller records its "origen")."""
     path = DATASETS / dataset / "clicks.jsonl"
     if not path.exists():
         return {}
-    return {video_of(d["id"]): np.asarray(d["H"], float) for d in map(json.loads, open(path, encoding="utf-8"))}
+    return {video_of(d["id"]): (np.asarray(d["H"], float), "propagated" if d.get("origen") else "hand")
+            for d in map(json.loads, open(path, encoding="utf-8"))}
 
 
 def _row(dataset, stem, img, w, h, template, source, H, fit, orig_split, **extra):
@@ -92,8 +97,8 @@ def _row(dataset, stem, img, w, h, template, source, H, fit, orig_split, **extra
     H, flips = canonicalize(np.asarray(H, float), PARAMS[template])
     return {"id": "{}/{}".format(dataset, stem), "image": img.relative_to(ROOT).as_posix(), "dataset": dataset,
             "video": video, "frame": frame, "template": template, "source": source, "w": w, "h": h,
-            "H": H.tolist(), "flips": flips, "fit": fit, "split": split_of(dataset, orig_split, video, source == "hand"),
-            **extra}
+            "H": H.tolist(), "flips": flips, "fit": fit,
+            "split": split_of(dataset, orig_split, video, source == "hand", source == "propagated"), **extra}
 
 
 def build():
@@ -116,7 +121,7 @@ def build():
                 # and 6 points still leave 2 redundant ones for the residual check to mean something
                 fit, info = fit_from_label(rec[2], tpl, w, h, 6, 6.0, 8.0)
                 source = "hockeyrink" if dataset == "hockeyrink" else ("auto_seg" if lbl.stem in auto else "nhl_prior")
-                H_hand = relabelled.get(video_of(lbl.stem)) if dataset == "hockeyrink_nhl" else None
+                H_hand = relabelled.get(video_of(lbl.stem), (None,))[0] if dataset == "hockeyrink_nhl" else None
                 if H_hand is not None:
                     old = {"H_label": canonicalize(fit[0], PARAMS[template])[0].tolist()} if fit else {}
                     rows.append(_row(dataset, lbl.stem, img, w, h, template, "hand", H_hand, None, orig_split,
@@ -128,14 +133,14 @@ def build():
                 rows.append(_row(dataset, lbl.stem, img, w, h, template, source, fit[0],
                                  {"inliers": len(fit[1]), "resid_px": round(float(info), 2)}, orig_split))
     for dataset in (HAND, *EXTRA):
-        for (video, frame), H in sorted(_hand_labels(dataset).items()):
+        for (video, frame), (H, source) in sorted(_hand_labels(dataset).items()):
             stem = "{}_{:06d}".format(video, frame)
             img = DATASETS / dataset / "images" / "val" / (stem + ".jpg")
             w, h = _size(img)
             if w is None:
                 dropped["{}: no image".format(dataset)] += 1
                 continue
-            rows.append(_row(dataset, stem, img, w, h, "hockey-nhl", "hand", H, None, "val"))
+            rows.append(_row(dataset, stem, img, w, h, "hockey-nhl", source, H, None, "val"))
     return rows, dropped
 
 
