@@ -21,6 +21,7 @@ from collections import Counter
 import cv2
 import numpy as np
 
+from sportcal.core.camera import is_plausible_view
 from sportcal.core.labels import read_label
 from sportcal.lab.hockey.make_line_masks import fit_from_label
 from sportcal.paths import DATASETS, ROOT
@@ -129,6 +130,9 @@ def build():
                     continue
                 if fit is None:
                     dropped["{}: {}".format(dataset, info)] += 1
+                    continue
+                if not is_plausible_view(fit[0], w, h, (0.0, PARAMS[template]["length"], 0.0, PARAMS[template]["width"])):
+                    dropped["{}: no camera gives this H (hockey.md 14d)".format(dataset)] += 1
                     continue
                 rows.append(_row(dataset, lbl.stem, img, w, h, template, source, fit[0],
                                  {"inliers": len(fit[1]), "resid_px": round(float(info), 2)}, orig_split))

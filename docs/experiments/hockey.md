@@ -638,6 +638,15 @@ for a held-out video - never test, and not in the hand-only fine-tune.
 them are accepted proposals, and clip 960-1110 is a chain (each carried from the previous accepted one, so its error can
 add up along the chain). Some of the day's later labels were clicked with the browser zoomed in, without the whole frame
 in view: they are being checked against their neighbours before the next index rebuild.
+Checked 2026-09-25: carried from both neighbours, 22 of the last 28 agree within 1-9 px; the 6 that disagree more
+(clip 240/270/300/1110, nhl7 9870/9900) fit the paint better than the carried proposal on inspection (fast, blurred pans
+break the tracking). None changed.
+
+**Index rebuild 2026-09-25** (`build_h_index`, previous index kept as `scratch_frames/hockey_h_before_endview.jsonl`):
+1495 frames. New: the 36 end-view labels (29 `hand` + 7 `propagated`, all train) and 16 new `valh` hand labels (9 `test`:
+nhl10 x6, nhl9 x3; 7 `test_leaky`). Gone: the 11 stored labels the plausibility gate refuses (section 14d; `build_h_index`
+now drops them). `test` is now 72 frames (nhl10 32, nhl4 17, nhl9 23), so section 14's numbers on 63 frames are not
+directly comparable: re-evaluate model A on the new `test` next to the retrain.
 
 **Claude clicking - method:** one labelled frame (nhl7 frame 9750, 7 hand clicks) clicked by Claude from zoomed crops
 with a pixel grid before seeing the hand label; one unlabelled frame (clip frame 990, a glass-level centre-ice view)
