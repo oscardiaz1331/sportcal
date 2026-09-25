@@ -634,6 +634,10 @@ fixes it with 6 spread points (drags still move the fit). Leave-one-out on the 2
 proposal lands p50 5.8 px from the frame's own clicks, max 34.9 (clip frame 270 from 300); ~2 s per proposal. A saved
 proposal is recorded (`"origen"` in clicks.jsonl) and `build_h_index` gives it source `propagated`: train, or excluded
 for a held-out video - never test, and not in the hand-only fine-tune.
+**Status 2026-09-24 evening:** 36 end-view labels (clip 0-330 and 930-1110, nhl3 9990-10170, nhl7 9630-9900); 7 of
+them are accepted proposals, and clip 960-1110 is a chain (each carried from the previous accepted one, so its error can
+add up along the chain). Some of the day's later labels were clicked with the browser zoomed in, without the whole frame
+in view: they are being checked against their neighbours before the next index rebuild.
 
 **Claude clicking - method:** one labelled frame (nhl7 frame 9750, 7 hand clicks) clicked by Claude from zoomed crops
 with a pixel grid before seeing the hand label; one unlabelled frame (clip frame 990, a glass-level centre-ice view)
