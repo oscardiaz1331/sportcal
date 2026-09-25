@@ -724,3 +724,22 @@ picked by our own models. A look at the sheet: side and end views of every game,
 (nhl11 frame 8052, to skip). Labels go to `hockeyrink_nhl_fresh`, split `fresh` (never train or test, and a saved
 proposal is excluded), clicked by hand with no model proposal, so the set stays independent of what it measures.
 
+**Result** (2026-09-25): 38 frames labelled (2 skipped: the nhl11 close-up and nhl14 frame 5796), split `fresh` of the
+rebuilt index (1533 frames). Model A2 (`runs/kpline/finetune`), scored on CPU with the section 14 measure:
+
+| | coverage | p50 | p90 | < 10 px | < 25 px | > 50 px |
+|---|---|---|---|---|---|---|
+| no gate | 100% | 7.2 | 11.0 | 82% | 97% | 1 |
+| plausibility gate (14d) | 97% | 7.2 | 10.9 | 82% | 97% | 0 |
+| >= 7 keypoints (14) | 89% | 7.1 | 10.6 | 76% | 89% | 0 |
+
+Per game p50: nhl11 7.4, nhl12 6.5, nhl13 6.4, nhl14 8.1 px; every game answered on every frame. The only gross answer
+(nhl13 frame 10575, a close view of a goal crease, 4 keypoints, 549 px) is the one the plausibility gate refuses; it
+refuses nothing else. The keypoint-count gate also drops it but costs 3 good answers (6.2, 8.7 and 14 px, 6 keypoints
+each). The 4 end views of the set (nhl12 x2, nhl14 x2) are 3.2-4.5 px off, named as labelled: the naming rule of section
+14g holds in new arenas.
+**Decision:** on games nothing was tuned on, A2 reaches the ~8 px target the product asked for (ADR 0003) at full
+coverage, and the plausibility gate is confirmed as the gate (the count gate is not needed). Proposed for ADR 0003:
+A2 + plausibility gate as the first product stage, YOLO as fallback. Caveats: 38 frames, 1 gross answer - the gate is
+confirmed on one case; outdoor games (nhl9) remain out of reach.
+
