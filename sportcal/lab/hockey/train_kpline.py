@@ -9,6 +9,7 @@ IIHF, the stored NHL ones are 11-22 px off), then fine-tune on the hand labels o
     python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune/best_h.pt --split test [--gate]
     python -m sportcal.lab.hockey.train_kpline --eval runs/hockeyrink/yolo26m-18/weights/best_homography.pt --yolo
     python -m sportcal.lab.hockey.train_kpline --phase pretrain --keypoints derived     # + circle points, section 14c
+    python -m sportcal.lab.hockey.train_kpline --sport soccer --phase pretrain          # FIFA pitch, soccer.md section 19
 
 Targets are rendered from H every time, never stored: a flip or a camera turn (`core.camera.ptz_warp`) changes H,
 `canonicalize` renames the points, and no remapping table exists to go wrong. Checkpoints are chosen by the median
@@ -25,25 +26,32 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from sportcal.core.camera import is_plausible_view, ptz_warp
+from sportcal.core.camera import canonical_mirror, is_plausible_view, ptz_warp
 from sportcal.core.geometry import geom_error, line_through, solve_points_lines
 from sportcal.core.labels import heatmap_peaks, render_heatmaps
-from sportcal.lab.hockey.build_h_index import OUT as INDEX
-from sportcal.lab.hockey.build_h_index import PARAMS, canonicalize
+from sportcal.lab.hockey.build_h_index import OUT as HOCKEY_INDEX
+from sportcal.lab.hockey.build_h_index import PARAMS
 from sportcal.lab.hockey.train_lines_seg import MEAN, STD, UNetResNet34
-from sportcal.paths import ROOT, RUNS
+from sportcal.paths import DATASETS, ROOT, RUNS
 from sportcal.sports.hockey import rink
+from sportcal.sports.soccer import field as FIFA
 
 SIZE = (960, 544)                            # network input: a 16:9 frame at 960 px, padded at the bottom to /32
 OUT_SIZE = (SIZE[0] // 2, SIZE[1] // 2)      # heatmaps at half the input (HalfResUNet)
 SIGMA = 1.5                                  # heatmap Gaussian, px at 480 (6 px at 1920)
-SEGMENTS = {k: [(a, b) for _, a, b in rink.straight_lines(p)] for k, p in PARAMS.items()}
+# per template: world extent (x0, x1, y0, y1) and the straight painted lines as world segments (circles are not lines)
+BOX = {**{k: (0.0, p["length"], 0.0, p["width"]) for k, p in PARAMS.items()},
+       "soccer-fifa": (-FIFA.HALF_LENGTH, FIFA.HALF_LENGTH, -FIFA.HALF_WIDTH, FIFA.HALF_WIDTH)}
+SEGMENTS = {**{k: [(a, b) for _, a, b in rink.straight_lines(p)] for k, p in PARAMS.items()},
+            "soccer-fifa": [(tuple(a), tuple(b)) for name, pl in FIFA.polylines().items() if "circle" not in name
+                            and "arc" not in name for a, b in zip(pl[:-1], pl[1:])]}
+# sport -> (the template its model is trained and scored on, its per-frame H index, its runs folder)
+SPORTS = {"hockey": ("hockey-nhl", HOCKEY_INDEX, "kpline"), "soccer": ("soccer-fifa", DATASETS / "soccer_h.jsonl", "kpline-soccer")}
 # the 56 keypoints of the rink template, or those plus the points derived from the circles and board corners
 KEYPOINT_SETS = {"base": rink.build_template,
                  "derived": lambda p: np.vstack([rink.build_template(p), rink.derived_keypoints(p)])}
-GRID = {k: np.stack(np.meshgrid(np.arange(0.0, p["length"] + 1e-9, 1.0), np.arange(0.0, p["width"] + 1e-9, 1.0)),
-                    -1).reshape(-1, 2) for k, p in PARAMS.items()}
-BOX = {k: (0.0, p["length"], 0.0, p["width"]) for k, p in PARAMS.items()}
+GRID = {k: np.stack(np.meshgrid(np.arange(x0, x1 + 1e-9, 1.0), np.arange(y0, y1 + 1e-9, 1.0)), -1).reshape(-1, 2)
+        for k, (x0, x1, y0, y1) in BOX.items()}
 # hand labels of training videos; test_leaky gives its frames to fine-tuning (the clean test set is `test`)
 FINETUNE_SPLITS = ("train", "test_leaky")
 
@@ -51,11 +59,19 @@ FINETUNE_SPLITS = ("train", "test_leaky")
 def keypoints(kp_set):
     """{template name: (K, 2) world keypoints} of one keypoint set. Passed around explicitly rather than set as a module
     global: DataLoader workers on Windows re-import this module and would see the default."""
-    return {k: KEYPOINT_SETS[kp_set](p) for k, p in PARAMS.items()}
+    # ponytail: one soccer set (the 31 named points of sports/soccer/field.py) whatever kp_set says
+    return {**{k: KEYPOINT_SETS[kp_set](p) for k, p in PARAMS.items()}, "soccer-fifa": FIFA.KEYPOINT_COORDS}
 
 
-def n_channels(kp):
-    return len(kp["hockey-nhl"]) + 2 * len(SEGMENTS["hockey-nhl"])
+def n_channels(kp, template="hockey-nhl"):
+    return len(kp[template]) + 2 * len(SEGMENTS[template])
+
+
+def canonicalize(H, template):
+    """H renamed to the image naming rule (`core.camera.canonical_mirror`): the hockey index's, and for soccer the one
+    `lab/soccer/soccernet_h` stores (+Y, the far touchline, up in a side view)."""
+    x0, x1, y0, y1 = BOX[template]
+    return canonical_mirror(H, ((x0 + x1) / 2, (y0 + y1) / 2), y_down=template != "soccer-fifa")[0]
 
 
 class HalfResUNet(UNetResNet34):
@@ -102,7 +118,7 @@ class Frames(Dataset):
             if rng.random() < 0.5:
                 G = np.array([[-1.0, 0, w0 - 1], [0, 1, 0], [0, 0, 1]]) @ G
             img = cv2.warpPerspective(img, G, (w0, h0), flags=cv2.INTER_LINEAR)
-            H = canonicalize(G @ H, PARAMS[r["template"]])[0]      # a mirrored frame renames its points
+            H = canonicalize(G @ H, r["template"])                 # a mirrored frame renames its points
             img = cv2.convertScaleAbs(img, alpha=rng.uniform(0.75, 1.25), beta=rng.uniform(-25, 25))
         x, s = to_input(img)
         s /= 2                                                     # heatmaps are at half the input
@@ -145,7 +161,7 @@ def estimate_H(heat, template, w0, kp, thr=0.3):
         if e0 is not None and e1 is not None and np.hypot(e0[0] - e1[0], e0[1] - e1[1]) > 5:
             wl.append(line_through(a, b))
             il.append(line_through(np.asarray(e0) / s, np.asarray(e1) / s))
-    return solve_points_lines(wp, ip, wl, il, PARAMS[template]["length"], w0, 8.0 * w0 / 1920)
+    return solve_points_lines(wp, ip, wl, il, BOX[template][1] - BOX[template][0], w0, 8.0 * w0 / 1920)
 
 
 @torch.no_grad()
@@ -174,7 +190,7 @@ def evaluate_yolo(weights, rows, device, gate=False):
     errs = []
     for r in rows:
         e = est.estimate(cv2.imread(str(ROOT / r["image"])))
-        H = None if e is None else canonicalize(e.H, PARAMS[r["template"]])[0]
+        H = None if e is None else canonicalize(e.H, r["template"])
         if H is not None and gate and not is_plausible_view(H, r["w"], r["h"], BOX[r["template"]]):
             H = None
         errs.append(np.inf if H is None else
@@ -193,12 +209,14 @@ def summary(errs):
 
 def train(args, rows, device):
     tr = select(rows, args.phase)
-    dev = [r for r in rows if r["split"] == "dev" and r["template"] == "hockey-nhl"]
+    template, _, runs = SPORTS[args.sport]
+    dev = [r for r in rows if r["split"] == "dev" and r["template"] == template]
     kp = keypoints(args.keypoints)
-    out = RUNS / "kpline" / (args.phase + ("" if args.keypoints == "base" else "-" + args.keypoints))
+    out = RUNS / runs / (args.phase + ("" if args.keypoints == "base" else "-" + args.keypoints))
     out.mkdir(parents=True, exist_ok=True)
-    print("{}: {} train frames, {} dev frames, {} channels -> {}".format(args.phase, len(tr), len(dev), n_channels(kp), out))
-    model = HalfResUNet(ncls=n_channels(kp)).to(device)
+    print("{}: {} train frames, {} dev frames, {} channels -> {}".format(args.phase, len(tr), len(dev),
+                                                                         n_channels(kp, template), out))
+    model = HalfResUNet(ncls=n_channels(kp, template)).to(device)
     if args.init:
         model.load_state_dict(torch.load(args.init, map_location=device))
     else:   # CenterNet's prior: start every pixel at p = 0.01, or the ~130k negatives swamp the first steps
@@ -241,6 +259,7 @@ def train(args, rows, device):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--sport", choices=tuple(SPORTS), default="hockey")
     ap.add_argument("--phase", choices=("pretrain", "finetune"), default="pretrain")
     ap.add_argument("--init", help="weights to start from (the pretrain best_h.pt for the fine-tune)")
     ap.add_argument("--epochs", type=int)
@@ -257,17 +276,18 @@ def main():
     ap.add_argument("--gate", action="store_true", help="with --eval: refuse the H no real camera gives (section 14d)")
     args = ap.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    rows = [json.loads(line) for line in open(INDEX, encoding="utf-8")]
+    template, index, _ = SPORTS[args.sport]
+    rows = [json.loads(line) for line in open(index, encoding="utf-8")]
     if not args.eval:
         train(args, rows, device)
         return
-    rows = [r for r in rows if r["split"] == args.split and r["template"] == "hockey-nhl"]
+    rows = [r for r in rows if r["split"] == args.split and r["template"] == template]
     if args.yolo:
         errs = evaluate_yolo(args.eval, rows, device, args.gate)
     else:
         state = torch.load(args.eval, map_location=device)
-        kp = next(keypoints(k) for k in KEYPOINT_SETS if n_channels(keypoints(k)) == state["final.1.weight"].shape[0])
-        model = HalfResUNet(ncls=n_channels(kp)).to(device)
+        kp = next(keypoints(k) for k in KEYPOINT_SETS if n_channels(keypoints(k), template) == state["final.1.weight"].shape[0])
+        model = HalfResUNet(ncls=n_channels(kp, template)).to(device)
         model.load_state_dict(state)
         errs = evaluate(model, rows, device, kp, gate=args.gate)
     for r, e in zip(rows, errs):

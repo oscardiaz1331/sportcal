@@ -118,3 +118,33 @@ def test_pnlcalib_camera_is_converted_to_our_world_convention():
     q = P @ [X, -Y, 0.0, 1.0]
     p = to_H(P) @ [X, Y, 1.0]
     assert np.allclose(p[:2] / p[2], q[:2] / q[2], atol=1e-6)
+
+
+def test_a_soccernet_style_annotation_gives_back_the_camera():
+    """Points on the markings, in SoccerNet's format (normalised, its class names), made from a known camera: the line
+    DLT must recover that camera, and a wrongly named line must not pass as a good fit."""
+    from sportcal.core.camera import pose_to_H
+    from sportcal.lab.soccer import soccernet_h as SN
+    w, h = 960, 540
+    H = pose_to_H(np.array([[-10.0, -60.0, 18.0, np.radians(-15), np.radians(15), 1.6 * w]]), w, h)[0]
+    H /= H[2, 2]
+
+    def pts(a, b, n=6):
+        s = np.linspace(a, b, n)
+        q = np.c_[s, np.ones(n)] @ H.T
+        q = q[:, :2] / q[:, 2:]
+        return [{"x": x / w, "y": y / h} for x, y in q if 0 < x < w and 0 < y < h]
+    ann = {name: p for name, (a, b) in SN.LINES.items() if len(p := pts(a, b)) >= 2}
+    assert len(ann) >= 4
+    H2, resid, n = SN.fit(ann, w, h)
+    grid = np.array([[x, y, 1.0] for x in np.linspace(-40, 20, 7) for y in np.linspace(-30, 30, 7)])
+    p1, p2 = grid @ H.T, grid @ (H2 / H2[2, 2]).T
+    assert np.abs(p1[:, :2] / p1[:, 2:] - p2[:, :2] / p2[:, 2:]).max() < 0.5 and resid < 0.5
+    swapped = dict(ann)
+    keys = [k for k in ann if k.startswith("Big rect.") and k.endswith("top")] + ["Side line top"]
+    swapped[keys[0]], swapped[keys[1]] = ann[keys[1]], ann[keys[0]]
+    rng = np.random.default_rng(0)                 # 1 px of click noise shows up in the residual
+    noisy = {k: [{"x": q["x"] + rng.normal(0, 1 / w), "y": q["y"] + rng.normal(0, 1 / h)} for q in v] for k, v in ann.items()}
+    assert 0.3 < SN.fit(noisy, w, h)[1] < 2
+    r = SN.fit(swapped, w, h)
+    assert r is None or r[1] > 5                   # refused, or it no longer fits its own points

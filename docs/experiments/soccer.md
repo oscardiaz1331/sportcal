@@ -536,3 +536,26 @@ pillow matplotlib`, download `SV_kp` and `SV_lines` from its v1.0.0 release, the
 
     <pnlcalib-python> sportcal/lab/soccer/pnlcalib_run.py --pnl-dir ../PnLCalib --weights-dir ../PnLCalib/weights --images datasets/soccer_labels/images --out runs/pnlcalib/soccer_labels_norefine.json --no-refine
     python -m sportcal.lab.soccer.pnlcalib_eval --preds runs/pnlcalib/soccer_labels_norefine.json
+
+## 19. Soccer keypoint + line model: data and pipeline (2026-09-25, not trained yet)
+
+**Plan:** hockey's model A recipe (`train_kpline`: named keypoints + straight-line ends as heatmaps, H by points + lines
+DLT, targets rendered from a per-frame H index, exact PTZ augmentation) on the FIFA pitch, trained on the SoccerNet
+camera-calibration annotations (calibration-2023: train / valid / test; each frame annotates points on 26 marking
+classes). Our 18 hand labels of `soccer` / `soccer2` (section 12) stay out of training: they are broadcasts SoccerNet
+never saw, the soccer counterpart of hockey's `fresh` set, and PnLCalib (section 18) is the number to beat on them.
+**Index** (`lab/soccer/soccernet_h`): straight markings -> image lines matched to world lines, plus the points where two
+of them meet on the pitch (lines alone - two families of parallels - left a noisy synthetic frame ill-conditioned), one
+DLT; circles only check it. Kept when the annotated points are within 2 px (at 1920) of the drawn markings and a real
+camera gives the H; named with `core.camera.canonical_mirror` (+Y, the far touchline, up in a side view). Goal posts and
+crossbars are off the ground plane: unused. Checked on a synthetic annotation (`tests/test_soccer.py`: the camera comes
+back, 1 px of click noise shows in the residual, a misnamed line does not pass).
+**Model:** `train_kpline --sport soccer`: the 31 named points of `sports/soccer/field.py` and the ends of its 17 straight
+segments, 65 channels; runs in `runs/kpline-soccer/`. Perfect targets decode back to their H within 2.7-4 px at 1920
+(half-resolution heatmaps over a 105 m pitch).
+
+    pip install SoccerNet
+    python -c "from SoccerNet.Downloader import SoccerNetDownloader as D; D(LocalDirectory='D:/SoccerNet').downloadDataTask(task='calibration-2023', split=['train','valid','test'])"
+    python -m sportcal.lab.soccer.soccernet_h --root D:/SoccerNet/calibration-2023
+    python -m sportcal.lab.hockey.train_kpline --sport soccer --phase pretrain
+
