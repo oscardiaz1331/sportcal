@@ -13,6 +13,8 @@ crossbars are off the ground plane and are not used.
 
     pip install SoccerNet     # then, once: SoccerNetDownloader(LocalDirectory=...).downloadDataTask("calibration-2023", ...)
     python -m sportcal.lab.soccer.soccernet_h --root D:/SoccerNet/calibration-2023      # -> datasets/soccer_h.jsonl
+
+Our own hand labels of `soccer` / `soccer2` (datasets/soccer_labels) join the index as split "fresh", never trained on.
 """
 import argparse
 import json
@@ -131,6 +133,18 @@ def main():
                          "source": "soccernet", "split": split, "w": w, "h": h, "H": H.tolist(), "flips": flips,
                          "fit": {"lines": n, "resid_px": round(resid * 1920.0 / w, 2),
                                  "circle_resid_px": round(resid_c * 1920.0 / w, 2) if resid_c == resid_c else None}})
+    # our own hand labels (labeler.py) of broadcasts SoccerNet never saw: the "fresh" split, never trained on
+    hand = DATASETS / "soccer_labels"
+    if (hand / "clicks.jsonl").exists():
+        for d in {d["id"]: d for d in map(json.loads, open(hand / "clicks.jsonl", encoding="utf-8"))}.values():
+            img = hand / "images" / (d["id"] + ".jpg")
+            im = cv2.imread(str(img))
+            if im is None:
+                continue
+            h, w = im.shape[:2]
+            H, flips = canonical_mirror(np.asarray(d["H"], float), (0.0, 0.0), y_down=False)
+            rows.append({"id": "soccer_labels/" + d["id"], "image": str(img), "template": "soccer-fifa", "source": "hand",
+                         "split": "fresh", "w": w, "h": h, "H": H.tolist(), "flips": flips, "fit": None})
     with open(OUT, "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in rows)
     print("{} frames -> {}".format(len(rows), OUT))
@@ -138,7 +152,9 @@ def main():
         print("  {:<6} {}".format(s, n))
     for why, n in dropped.most_common():
         print("  left out {:>6}  {}".format(n, why))
-    print("  residual p50 {:.2f} p90 {:.2f} px at 1920".format(*np.percentile([r["fit"]["resid_px"] for r in rows], [50, 90])))
+    fitted = [r["fit"]["resid_px"] for r in rows if r["fit"]]
+    if fitted:
+        print("  line residual p50 {:.2f} p90 {:.2f} px at 1920".format(*np.percentile(fitted, [50, 90])))
 
 
 if __name__ == "__main__":
