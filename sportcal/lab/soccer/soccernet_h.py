@@ -5,8 +5,9 @@ keypoint + line model can be rendered from H and the template. Results: docs/exp
 Each annotation gives, per marking class, points on that marking in normalised image coordinates. Straight markings
 become image lines (least squares through their points) matched to the template's world lines; with the points where
 two of them meet on the pitch, one DLT (`core.geometry.solve_points_lines`) gives H; the circle points only check it.
-A frame is kept when its annotated points lie within --max-px of the markings its H draws and a real camera can give
-the H (`core.camera.is_plausible_view`).
+A frame is kept when its straight-line points lie within --max-px of the lines its H draws, its circle points within
+--max-circle-px of the circles (looser: arcs are clicked less precisely and a wide lens bends them), and a real camera
+can give the H (`core.camera.is_plausible_view`). Thresholds read off a 1500-frame sample: soccer.md section 19.
 World frame: ours (origin at the centre, +Y = far touchline); SoccerNet's y points the other way. Goal posts and
 crossbars are off the ground plane and are not used.
 
@@ -51,7 +52,9 @@ def _dist_to_segment_polyline(pts, poly):
 
 
 def fit(ann, w, h, min_lines=4):
-    """(H world -> px, median distance px of every annotated point to its marking as H draws it, n lines) or None."""
+    """(H world -> px, median px distance of the annotated straight-line points to their lines as H draws them, number
+    of lines, the same median for the circle points - nan without them) or None. The circles are not fitted, so they
+    also catch what the lines cannot show (a wide lens bends them away from any H)."""
     wl, il, used = [], [], []
     for name, (a, b) in LINES.items():
         p = np.array([[q["x"] * w, q["y"] * h] for q in ann.get(name, [])], float)
@@ -80,7 +83,7 @@ def fit(ann, w, h, min_lines=4):
     if H is None:
         return None
     H = H / H[2, 2]
-    d = []
+    d, dc = [], []
     for name, p in used:
         seg = np.linspace(LINES[name][0], LINES[name][1], 200)
         q = np.c_[seg, np.ones(len(seg))] @ H.T
@@ -90,14 +93,15 @@ def fit(ann, w, h, min_lines=4):
         if len(p):
             t = np.linspace(0, 2 * np.pi, 360)
             q = np.c_[c[0] + F.CIRCLE_RADIUS * np.cos(t), c[1] + F.CIRCLE_RADIUS * np.sin(t), np.ones(360)] @ H.T
-            d.append(_dist_to_segment_polyline(p, q[:, :2] / q[:, 2:]))
-    return H, float(np.median(np.concatenate(d))), len(wl)
+            dc.append(_dist_to_segment_polyline(p, q[:, :2] / q[:, 2:]))
+    return H, float(np.median(np.concatenate(d))), len(wl), float(np.median(np.concatenate(dc))) if dc else float("nan")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", required=True, help="folder with train/ valid/ test/ (images + one json per image)")
-    ap.add_argument("--max-px", type=float, default=2.0, help="median annotation residual at 1920 px to keep a frame")
+    ap.add_argument("--max-px", type=float, default=3.0, help="median straight-line residual at 1920 px to keep a frame")
+    ap.add_argument("--max-circle-px", type=float, default=10.0, help="the same for the circle points, when there are any")
     args = ap.parse_args()
     rows, dropped = [], Counter()
     for split_dir, split in (("train", "train"), ("valid", "dev"), ("test", "test")):
@@ -112,9 +116,12 @@ def main():
             if r is None:
                 dropped["fewer than 4 straight markings"] += 1
                 continue
-            H, resid, n = r
+            H, resid, n, resid_c = r
             if resid * 1920.0 / w > args.max_px:
-                dropped["annotation residual > {} px".format(args.max_px)] += 1
+                dropped["line residual > {} px".format(args.max_px)] += 1
+                continue
+            if resid_c * 1920.0 / w > args.max_circle_px:
+                dropped["circle residual > {} px".format(args.max_circle_px)] += 1
                 continue
             if not is_plausible_view(H, w, h, BOX):
                 dropped["no camera gives this H"] += 1
@@ -122,7 +129,8 @@ def main():
             H, flips = canonical_mirror(H, (0.0, 0.0), y_down=False)
             rows.append({"id": "soccernet/{}/{}".format(split_dir, js.stem), "image": str(img), "template": "soccer-fifa",
                          "source": "soccernet", "split": split, "w": w, "h": h, "H": H.tolist(), "flips": flips,
-                         "fit": {"lines": n, "resid_px": round(resid * 1920.0 / w, 2)}})
+                         "fit": {"lines": n, "resid_px": round(resid * 1920.0 / w, 2),
+                                 "circle_resid_px": round(resid_c * 1920.0 / w, 2) if resid_c == resid_c else None}})
     with open(OUT, "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in rows)
     print("{} frames -> {}".format(len(rows), OUT))

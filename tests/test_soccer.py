@@ -136,7 +136,7 @@ def test_a_soccernet_style_annotation_gives_back_the_camera():
         return [{"x": x / w, "y": y / h} for x, y in q if 0 < x < w and 0 < y < h]
     ann = {name: p for name, (a, b) in SN.LINES.items() if len(p := pts(a, b)) >= 2}
     assert len(ann) >= 4
-    H2, resid, n = SN.fit(ann, w, h)
+    H2, resid, n, _ = SN.fit(ann, w, h)
     grid = np.array([[x, y, 1.0] for x in np.linspace(-40, 20, 7) for y in np.linspace(-30, 30, 7)])
     p1, p2 = grid @ H.T, grid @ (H2 / H2[2, 2]).T
     assert np.abs(p1[:, :2] / p1[:, 2:] - p2[:, :2] / p2[:, 2:]).max() < 0.5 and resid < 0.5

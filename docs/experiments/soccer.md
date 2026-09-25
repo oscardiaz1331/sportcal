@@ -550,6 +550,11 @@ DLT; circles only check it. Kept when the annotated points are within 2 px (at 1
 camera gives the H; named with `core.camera.canonical_mirror` (+Y, the far touchline, up in a side view). Goal posts and
 crossbars are off the ground plane: unused. Checked on a synthetic annotation (`tests/test_soccer.py`: the camera comes
 back, 1 px of click noise shows in the residual, a misnamed line does not pass).
+**Thresholds** (1500 random train frames that fit, residuals at 1920): straight-line points p50 1.6 / p75 2.9 / p90 10 px;
+circle points p50 6.1 / p75 17 / p90 107 px (arcs are clicked less precisely, and a wide lens bends them where no H can
+follow; on inspection frames with good lines and 6-10 px circles are good labels, 13 px circles go with visibly bent
+far lines). Kept: lines <= 3 px and circles <= 10 px, 57% of the fitted frames (the first run, all points <= 2 px, kept
+37%: 6522 frames). About a fifth of the frames have fewer than 4 straight markings and are not fitted.
 **Model:** `train_kpline --sport soccer`: the 31 named points of `sports/soccer/field.py` and the ends of its 17 straight
 segments, 65 channels; runs in `runs/kpline-soccer/`. Perfect targets decode back to their H within 2.7-4 px at 1920
 (half-resolution heatmaps over a 105 m pitch).
