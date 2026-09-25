@@ -739,7 +739,8 @@ refuses nothing else. The keypoint-count gate also drops it but costs 3 good ans
 each). The 4 end views of the set (nhl12 x2, nhl14 x2) are 3.2-4.5 px off, named as labelled: the naming rule of section
 14g holds in new arenas.
 **Decision:** on games nothing was tuned on, A2 reaches the ~8 px target the product asked for (ADR 0003) at full
-coverage, and the plausibility gate is confirmed as the gate (the count gate is not needed). Proposed for ADR 0003:
-A2 + plausibility gate as the first product stage, YOLO as fallback. Caveats: 38 frames, 1 gross answer - the gate is
+coverage, and the plausibility gate is confirmed as the gate (the count gate is not needed). Adopted in ADR 0003
+(2026-09-25): A2 + plausibility gate as the first product stage (`product.hockey.KplineEstimator`), YOLO as optional
+fallback. Caveats: 38 frames, 1 gross answer - the gate is
 confirmed on one case; outdoor games (nhl9) remain out of reach.
 

@@ -29,8 +29,8 @@ from sportcal import sports
 from sportcal.product.hockey import build_pipeline
 from sportcal.product.pipeline import project_to_field
 
-pipe = build_pipeline("runs/hockeyrink/yolo26m-17/weights/best_homography.pt",
-                      seg_weights=None, hold_frames=15)          # seg_weights enables the DLT stage
+pipe = build_pipeline("runs/hockeyrink/yolo26m-17/weights/best_homography.pt",   # None: refuse rather than a coarse answer
+                      kpline_weights="runs/kpline/finetune/best_h.pt", hold_frames=15)
 est = pipe(frame)                                                # Estimate(H, confidence, method) or None
 if est:
     xy_m, inside = project_to_field(est, feet_px, sports.get("hockey-nhl"))
@@ -45,6 +45,7 @@ if est:
 
 ## Status
 
-Nothing reaches the ~8 px accuracy a metric minimap needs. Best full-coverage model: YOLO keypoints, 102 px median at 88%
-coverage on the hand-labelled validation set. The classical segmentation + DLT path is precise (15-56 px) but answers on
-only a few percent of frames. Details and the open questions: `docs/experiments/hockey.md`, sections 10 and 13.
+Best model: keypoint + line heatmaps (model A2, `lab/hockey/train_kpline.py`) with a camera plausibility gate, 7.2 px
+median at 97% coverage on 4 NHL arenas nothing was tuned on - the first to reach the ~8 px a metric minimap needs. YOLO
+keypoints (102 px median) remain as an optional coverage fallback. Open: outdoor games and wrong homographies a real
+camera could produce. Details: `docs/decisions/0003-product-composition.md`, `docs/experiments/hockey.md` sections 14g-14h.

@@ -196,9 +196,9 @@ class UNetResNet34(nn.Module):
     """U-Net con encoder ResNet34 de ImageNet. Preentrenado importa: con 918
     imagenes de entrenamiento, partir de cero no llega."""
 
-    def __init__(self, ncls=NCLS):
+    def __init__(self, ncls=NCLS, pretrained=True):
         super().__init__()
-        r = resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
+        r = resnet34(weights=ResNet34_Weights.IMAGENET1K_V1 if pretrained else None)   # False: weights come from a checkpoint
         self.stem = nn.Sequential(r.conv1, r.bn1, r.relu)   # 64,  1/2
         self.pool = r.maxpool
         self.e1, self.e2, self.e3, self.e4 = r.layer1, r.layer2, r.layer3, r.layer4

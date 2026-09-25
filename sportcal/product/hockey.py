@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sportcal.core.camera import is_plausible_view
 from sportcal.core.geometry import REF_WIDTH, fit_homography_ransac
 from sportcal.product.pipeline import Estimate, HomographyPipeline
 from sportcal.sports import get as get_sport
@@ -79,12 +80,43 @@ class SegDltEstimator:
         return Estimate(H, 1.0 - cost / self.max_cost, self.name)
 
 
-def build_pipeline(yolo_weights, seg_weights=None, sport="hockey-nhl", hold_frames=0):
-    """Default hockey composition: segmentation-DLT first (when weights are given), YOLO
-    keypoints as the full-coverage fallback."""
+class KplineEstimator:
+    """Heatmaps of the template keypoints and of the ends of the straight lines -> points + lines DLT, refused when no
+    real camera gives that H (`core.camera.is_plausible_view`). The best measured method (ADR 0003)."""
+    name = "kpline"
+
+    def __init__(self, weights, sport="hockey-nhl", device="cuda"):
+        # ponytail: same debt as SegDltEstimator: HalfResUNet and estimate_H live in sportcal.lab.hockey.train_kpline,
+        # imported lazily. Upgrade: promote them to sportcal/models + core with the lab port (docs/porting-status.md).
+        import torch
+        from sportcal.lab.hockey import train_kpline as K
+
+        self._K, self._torch = K, torch
+        self.kp, self.sport, self.device = K.keypoints("base"), sport, torch.device(device)
+        self.model = K.HalfResUNet(ncls=K.n_channels(self.kp, sport), pretrained=False).to(self.device).eval()
+        self.model.load_state_dict(torch.load(weights, map_location=self.device))
+
+    def estimate(self, frame):
+        h, w = frame.shape[:2]
+        x, _ = self._K.to_input(frame)
+        torch, dev = self._torch, self.device
+        with torch.no_grad(), torch.autocast(dev.type, enabled=dev.type == "cuda"):
+            heat = torch.sigmoid(self.model(x[None].to(dev)).float()).cpu().numpy()[0]
+        H = self._K.estimate_H(heat, self.sport, w, self.kp)
+        if H is None or not is_plausible_view(H, w, h, self._K.BOX[self.sport]):
+            return None
+        return Estimate(H, 1.0, self.name)  # the gate is yes/no: no graded confidence to report
+
+
+def build_pipeline(yolo_weights, seg_weights=None, sport="hockey-nhl", hold_frames=0, kpline_weights=None):
+    """Hockey composition (ADR 0003), first answer wins: the keypoint + line model, segmentation-DLT, YOLO keypoints as
+    the full-coverage fallback. Each stage is skipped when its weights are None."""
     stages = []
+    if kpline_weights is not None:
+        stages.append(KplineEstimator(kpline_weights, sport=sport))
     if seg_weights is not None:
         stages.append(SegDltEstimator(seg_weights, rink_params=rink.RINK_NHL if sport == "hockey-nhl"
                                       else rink.RINK_IIHF))
-    stages.append(YoloKeypointEstimator(yolo_weights, sport=sport))
+    if yolo_weights is not None:
+        stages.append(YoloKeypointEstimator(yolo_weights, sport=sport))
     return HomographyPipeline(stages, hold_frames=hold_frames)

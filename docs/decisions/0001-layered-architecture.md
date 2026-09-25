@@ -37,7 +37,8 @@ surface segmentation. Adding a sport meant copying hockey code; nothing said whi
 
 * `product/hockey.py::SegDltEstimator` lazily imports `lab/hockey/diagnose_lines_seg.py` and
   `seg_to_homography.py`, because the segmentation network and `solve_from_probs` still live in the
-  lab. Upgrade path: promote them to `sportcal/models/` and `core/` when the lab port lands.
+  lab. Same for `KplineEstimator` and `lab/hockey/train_kpline.py` (`HalfResUNet`,
+  `estimate_H`). Upgrade path: promote them to `sportcal/models/` and `core/` when the lab port lands.
 * (Resolved 2026-09-21) `testing/` was ported: soccer template -> `sports/soccer`, camera math -> `core/camera`, solver ->
   `lab/soccer`, apps -> `lab/common`, and the four temporary compat shims were deleted. Lab code of different sports must not
   import each other (enforced by `tests/test_layering.py`); what both need goes to `core/` or `lab/common/`.

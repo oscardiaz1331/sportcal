@@ -1,4 +1,7 @@
+import json
+
 import numpy as np
+import pytest
 
 from sportcal.product.pipeline import Estimate, HomographyPipeline, project_to_field
 from sportcal.sports import get
@@ -62,7 +65,6 @@ def test_default_is_no_hold():
 
 
 def test_pipeline_requires_an_estimator():
-    import pytest
     with pytest.raises(ValueError):
         HomographyPipeline([])
 
@@ -74,3 +76,26 @@ def test_project_to_field_flags_points_outside_the_rink():
     world, inside = project_to_field(E("a"), img, sport)
     assert np.allclose(world, np.vstack([world_in, world_out]), atol=1e-6)
     assert inside.tolist() == [True, False]
+
+
+@pytest.mark.slow
+def test_kpline_estimator_answers_a_new_arena_and_refuses_an_impossible_camera():
+    """Real weights on two frames of arenas nothing was tuned on (split `fresh`): one answered close to the hand label,
+    and the one whose DLT puts part of the rink behind the camera refused instead of answered hundreds of px off."""
+    pytest.importorskip("torch")
+    import cv2
+
+    from sportcal.core.geometry import geom_error
+    from sportcal.lab.hockey import train_kpline as K
+    from sportcal.paths import ROOT, RUNS
+    from sportcal.product.hockey import KplineEstimator
+
+    weights = RUNS / "kpline" / "finetune" / "best_h.pt"
+    if not (weights.exists() and K.HOCKEY_INDEX.exists()):
+        pytest.skip("needs the kpline weights and the H index")
+    rows = {r["id"]: r for r in map(json.loads, open(K.HOCKEY_INDEX, encoding="utf-8"))}
+    good, bad = rows["hockeyrink_nhl_fresh/nhl14_004181"], rows["hockeyrink_nhl_fresh/nhl13_010575"]
+    est = KplineEstimator(weights, device="cpu")
+    e = est.estimate(cv2.imread(str(ROOT / good["image"])))
+    assert geom_error(e.H, np.asarray(good["H"]), K.GRID["hockey-nhl"], good["w"], good["h"]) < 10
+    assert est.estimate(cv2.imread(str(ROOT / bad["image"]))) is None

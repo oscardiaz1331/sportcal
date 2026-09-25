@@ -1,34 +1,56 @@
-# ADR 0003 - Product composition (provisional)
+# ADR 0003 - Product composition
 
-Status: provisional - no method meets the accuracy target yet
+Status: accepted 2026-09-25. Replaces the provisional composition of 2026-09-21 (segmentation-DLT, then YOLO), under which
+no method reached the accuracy target.
 
 ## Decision
 
-The hockey product is `product.hockey.build_pipeline`: an ordered chain, first answer wins.
+The hockey product is `product.hockey.build_pipeline`: an ordered chain, first answer wins. A stage whose weights are
+`None` is left out.
 
-| Order | Estimator | Why here | Measured |
+| Order | Estimator (argument) | Why here | Measured |
 |---|---|---|---|
-| 1 (optional, needs seg weights) | `SegDltEstimator` | Precise when it answers, refuses otherwise | 15.5 px (IIHF) / 56 px (NHL) median on curated val, but coverage only 5-14%; ~0% on random frames |
-| 2 | `YoloKeypointEstimator` | Only method with near-full coverage | 88% coverage, 102 px median, 10.5% of all frames < 25 px on the hand-labelled val (`valh`) |
+| 1 | `KplineEstimator` (`kpline_weights`: model A2, `runs/kpline/finetune/best_h.pt`) | Precise at near-full coverage; refuses the homographies no camera gives (`core.camera.is_plausible_view`) | 4 arenas nothing was tuned on (`fresh`, 38 frames): 97% coverage, p50 7.2 px, p90 10.9, 97% < 25 px, no answer > 50 px. `test` (72 frames): 76% coverage, p50 7.2, p90 65 |
+| 2 (optional) | `SegDltEstimator` (`seg_weights`) | Kept from the previous composition; it adds little behind stage 1 | 15.5 px (IIHF) / 56 px (NHL) median on curated val, answers on ~0-4% of random frames |
+| 3 (optional) | `YoloKeypointEstimator` (`yolo_weights`) | Coverage for the frames stage 1 refuses | 88% coverage, 102 px median on `valh`; not measured on `fresh` |
 
-Optional `hold_frames` reuses the last H when every stage refuses (camera nearly static within a
-shot); call `pipeline.reset()` at shot cuts.
+Sources: `experiments/hockey.md` sections 14g (A2, `test`) and 14h (`fresh`, the gates); ADR 0004 for why the network
+outputs heatmaps and one solver turns them into H.
+
+Optional `hold_frames` reuses the last H when every stage refuses (camera nearly static within a shot); call
+`pipeline.reset()` at shot cuts.
+
+**Which stages to use.** For metric work (distances, speeds) pass `yolo_weights=None`: a refusal, covered by
+`hold_frames`, is better than a YOLO answer ~100 px off. Keep YOLO when an answer on every frame matters more than its
+accuracy (coarse positioning).
 
 ## Honest status
 
-The target for a reliable minimap is ~8 px. **Nothing reaches it.** The composition exists so that
-an improvement in any stage lands in the product without touching the others, not because the
-current numbers are good enough. Use the product for coarse positioning only; do not rely on it for
-metric distances.
+On games nothing was tuned on, stage 1 reaches the ~8 px a metric minimap needs. Limits:
+
+* 38 `fresh` frames with a single gross answer: the plausibility gate is confirmed on one case.
+* A wrong homography that a real camera could produce still goes through. Outdoor `nhl9` in `test` is the example: with
+  the gate, 30% of its frames are answered, at p50 248 px. Outdoor games are out of reach.
+* End views are named by the view (`core.camera.canonical_mirror`), not by the physical end of the arena; which end a
+  frame shows needs context (the tracker, or asymmetric markings).
+* All numbers are NHL broadcasts. IIHF rinks (`sport="hockey-iihf"`) are untested in the product.
 
 ## What would change this
 
-* A segmentation model whose DLT coverage on random NHL frames is well above 4% (see the open
-  questions in `experiments/hockey.md`, section 13).
-* A verified way to reject wrong-geometry frames (ADR 0002).
-* A learned solver that beats YOLO's 102 px at full coverage (the direct pose head reached ~340 px).
+* A check that catches camera-like wrong homographies (open question 4 of `experiments/hockey.md` section 13), e.g.
+  agreement with the H carried from neighbouring frames of the shot (`core.motion`).
+* The template-conditioned model (ADR 0004) replacing the per-sport one, if it matches it on `fresh`.
+* A measurement of YOLO on the frames stage 1 refuses: if it does no better than refusing, drop stage 3.
 
-## Verified on real weights (2026-09-21)
+## Verified on real weights (2026-09-25): the kpline stage
+
+`KplineEstimator` with the A2 weights, one ndarray per frame, CPU (4 threads), on the 38 `fresh` frames: 97% coverage,
+p50 7.2, p90 10.9, max 14.0 px, 82% < 10 px; answered 37, refused 1 (nhl13 frame 10575, the frame the lab gate
+refuses). The same numbers as the lab measure of section 14h. 0.85 s/frame on CPU; GPU speed not timed. The slow test
+`tests/test_product.py::test_kpline_estimator_answers_a_new_arena_and_refuses_an_impossible_camera` repeats it on two of
+those frames.
+
+## Verified on real weights (2026-09-21): the YOLO and seg-DLT stages
 
 Run on the 76 hand-labelled `valh` frames with `yolo26m-17/best_homography.pt` and `runs/lineas_seg/best.pt`:
 
