@@ -20,6 +20,11 @@ outputs heatmaps and one solver turns them into H.
 Optional `hold_frames` reuses the last H when every stage refuses (camera nearly static within a shot); call
 `pipeline.reset()` at shot cuts.
 
+**On video, pass `smooth=0.1`.** Each answer is then blended into the previous H carried along the camera motion (KLT),
+and a hold follows the camera instead of freezing: frame-to-frame jitter falls from 29.6 to 2.8 px (p50), with the same
+or slightly better accuracy than per-frame answers (`experiments/hockey.md` section 14i). Leave it `None` for single
+images.
+
 **Which stages to use.** For metric work (distances, speeds) pass `yolo_weights=None`: a refusal, covered by
 `hold_frames`, is better than a YOLO answer ~100 px off. Keep YOLO when an answer on every frame matters more than its
 accuracy (coarse positioning).

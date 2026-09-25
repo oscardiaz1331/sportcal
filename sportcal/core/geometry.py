@@ -252,6 +252,17 @@ def image_to_world(H, img_xy):
     return cv2.perspectiveTransform(pts, np.linalg.inv(H)).reshape(-1, 2)
 
 
+def blend_homographies(H0, H1, t, w, h, inset=0.1):
+    """(H, gap): the H that puts the frame's inner quad a fraction t of the way from where H0 sees it to where H1 does
+    (t = 0 gives H0, t = 1 gives H1), and the largest distance in px between the two quads. Two H's of one view are
+    compared and mixed where the picture is, not through their matrix entries."""
+    quad = np.float32([[inset * w, inset * h], [(1 - inset) * w, inset * h], [(1 - inset) * w, (1 - inset) * h],
+                       [inset * w, (1 - inset) * h]])
+    q1 = cv2.perspectiveTransform(quad[:, None], np.asarray(H1, float) @ np.linalg.inv(H0))[:, 0]
+    T = cv2.getPerspectiveTransform(quad, (quad + t * (q1 - quad)).astype(np.float32))
+    return T @ H0, float(np.linalg.norm(q1 - quad, axis=1).max())
+
+
 def line_through(p, q):
     """Homogeneous line (a, b, c) through two 2-D points."""
     return np.cross([p[0], p[1], 1.0], [q[0], q[1], 1.0])

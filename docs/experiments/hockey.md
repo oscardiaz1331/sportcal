@@ -744,3 +744,45 @@ coverage, and the plausibility gate is confirmed as the gate (the count gate is 
 fallback. Caveats: 38 frames, 1 gross answer - the gate is
 confirmed on one case; outdoor games (nhl9) remain out of reach.
 
+## 14i. Temporal smoothing along the camera motion - `product.pipeline.HomographyPipeline(smooth=...)` (2026-09-25)
+
+**Why:** on video (the product demo on nhl11) the minimap shakes. Each frame's H is estimated on its own, and a few px
+of error per frame move the whole projected rink from one frame to the next.
+**Method:** a complementary filter. The camera motion between consecutive frames (`core.motion.estimate_motion`, KLT
+over the whole frame, one homography by RANSAC at 1 working px) carries the last output to the new frame, and the new
+answer only pulls it a fraction `smooth` of the way (`core.geometry.blend_homographies`, mixed on the image of the
+frame's inner quad). An answer more than 150 px (at 1920, largest distance on that quad) away from the carried H counts
+as a refusal unless it persists for more than 5 frames (a missed cut), which resets the filter. A hold follows the
+camera instead of freezing.
+**Measure:** the 38 `fresh` labels of section 14h, each with the 30 frames before it (960 px JPG, matched to the label
+image by pixels), model A2 answers cached per frame. Error at the labelled frame against the hand label (section 14
+measure), and jitter: for each pair of consecutive frames, the largest distance on the frame's inner quad between the
+output H and the previous output carried by the camera motion, i.e. the frame-to-frame change the camera does not
+explain (px at 1920). Holds and resets are counted over the 1178 frames.
+
+| smooth | answered | p50 | p90 | < 10 px | max | jitter p50 | jitter p90 | holds | resets |
+|---|---|---|---|---|---|---|---|---|---|
+| none (per frame) | 37/38 | 5.9 | 10.7 | 31 | 17 | 29.6 | 104.3 | - | - |
+| 0.05 | 37/38 | 6.7 | 10.9 | 32 | 13 | 1.5 | 4.0 | 52 | 4 |
+| **0.1** | 37/38 | 6.3 | **9.6** | **35** | **11** | 2.8 | 7.7 | 41 | 3 |
+| 0.2 | 37/38 | 6.6 | 9.6 | 33 | 12 | 5.1 | 15.2 | 36 | 3 |
+| 0.3 | 37/38 | 6.5 | 10.7 | 30 | 21 | 7.6 | 22.1 | 40 | 3 |
+
+**Two settings that looked harmless were not:**
+
+* The RANSAC threshold of the motion. With `core.motion`'s default of 3 working px (at `smooth` 0.1): p50 7.8, p90 16.4,
+  max 25 px. Static overlays (score bug, channel logo) sit within 3 px of a slow pan, pull the fitted motion towards
+  zero, and the carried H lags by a bias the filter only corrects at rate `smooth`. At 1 px (0.5 gives the same) they
+  drop out. Taking the motion from the stands only (region "background") or from the ice ("field") was worse (p50 6.7 /
+  10.7, max 45 / 47 px at the 3 px threshold).
+* The jump limit. At 40 px, normal answer noise on the far corners of the quad crossed it: 40% of the frames became
+  holds and the filter reset 35 times (a visible jump each time) - its low jitter came from ignoring the model, not
+  from filtering it. At 150 px: 3.5% holds, 3 resets. 100 and 300 px give similar numbers.
+
+**Decision:** `smooth=0.1` in the demo and for video (ADR 0003): jitter p50 from 29.6 to 2.8 px, accuracy the same or
+slightly better than per frame (4 more frames under 10 px, max 17 -> 11 px). Single images keep `smooth=None` (the
+filter needs consecutive frames).
+**Caveats:** 30-frame sequences, so drift over a long shot is corrected continuously but not measured beyond that. The
+jitter reference is the same KLT motion the filter uses, so a wrong motion would not show in it; the error at the
+labelled frame is the check for that. The detection boxes jitter too (the feet point is the bottom of the box); that is
+not addressed here.

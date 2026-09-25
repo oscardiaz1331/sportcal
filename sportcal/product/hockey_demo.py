@@ -42,9 +42,11 @@ MAIN_CAMERA_H_RANGE = (120, 126)
 MAIN_CAMERA_S_RANGE = (11, 12)
 MAIN_CAMERA_V_RANGE = (150, 217)
 
-# rink calibration model (ADR 0003) and how many frames the last H is kept when it refuses
+# rink calibration model (ADR 0003), how many frames the last H is kept when it refuses, and the weight of each new
+# answer against the H carried along the camera motion (the minimap stops shaking; hockey.md section 14i)
 KPLINE_WEIGHTS = RUNS / "kpline" / "finetune" / "best_h.pt"
 HOLD_FRAMES = 15
+SMOOTH = 0.1
 
 RINK = rink.RINK_NHL
 
@@ -144,7 +146,8 @@ CLASS_REFEREE = CLASS_NAME_TO_ID["referee"]
 # marcas de la pista, no entidades en juego) no se proyecta a la homografia
 ROLE_CLASSES = frozenset({CLASS_PUCK, CLASS_GOALIE, CLASS_REFEREE, CLASS_PLAYER})
 # no YOLO fallback: a refused frame keeps the last H (hold) rather than take an answer ~100 px off (ADR 0003)
-rink_pipeline = build_pipeline(None, kpline_weights=KPLINE_WEIGHTS, hold_frames=HOLD_FRAMES, device=args.device)
+rink_pipeline = build_pipeline(None, kpline_weights=KPLINE_WEIGHTS, hold_frames=HOLD_FRAMES, device=args.device,
+                               smooth=SMOOTH)
 tracker = ByteTrackTracker()
 scene_detector = ContentDetector()
 
