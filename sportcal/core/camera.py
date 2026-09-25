@@ -176,6 +176,34 @@ def view_angle(H, w, h):
     return float(np.degrees(np.arctan2(abs(d[1]), abs(d[0]))))
 
 
+def canonical_mirror(H, centre, y_down=True, end_angle=45.0):
+    """(H @ S, flips): of the 4 namings of a field that is symmetric about x = centre[0] and about y = centre[1] (each
+    mirror draws the same lines and renames every point), the one an image rule picks, so that the same view always gets
+    the same names - a model of named points cannot learn names the labels give at random. flips: "", "x", "y" or "xy".
+
+    The rule looks at where the world axes point in the image at the field centre. Side view (the long axis, world x,
+    within `end_angle` degrees of the image horizontal): +x points right, +y points down (`y_down`) or up. End view: +x
+    points down, i.e. the end the camera sits behind is the high-x one, and +y points left - the side rule turned a
+    quarter, so the two agree for a far end at the upper left. It names the view, not the arena: which physical end or
+    side a frame shows needs context the frame does not have.
+    ponytail: a view whose long axis sits near `end_angle` can switch names between two nearly equal frames; broadcast
+    views are far from it (hockey.md section 14g)."""
+    H = np.asarray(H, float)
+    cx, cy = centre
+
+    def image_step(ex, ey):
+        a, b = H @ [cx, cy, 1.0], H @ [cx + ex, cy + ey, 1.0]
+        return b[:2] / b[2] - a[:2] / a[2]
+    dx, dy = image_step(1.0, 0.0), image_step(0.0, 1.0)
+    if np.degrees(np.arctan2(abs(dx[1]), abs(dx[0]))) >= end_angle:
+        fx, fy = dx[1] < 0, dy[0] > 0
+    else:
+        fx, fy = dx[0] < 0, (dy[1] < 0) == y_down
+    S = np.array([[-1.0 if fx else 1.0, 0, 2 * cx if fx else 0], [0, -1.0 if fy else 1.0, 2 * cy if fy else 0], [0, 0, 1]])
+    Hc = H @ S
+    return Hc / Hc[2, 2], "x" * bool(fx) + "y" * bool(fy)
+
+
 def robust_centre(centres, max_dev=4.0):
     """(median centre, per-axis spread, number of votes) over an array of (n, 3) camera centres, or None when empty.
 

@@ -153,3 +153,21 @@ def test_robust_centre_drops_a_wild_vote():
     votes = np.array([[-3.3, -67.9, 13.3], [-3.2, -68.0, 13.4], [-3.4, -67.8, 13.2], [30.3, -34.2, 5.6]])
     centre, spread, n = C.robust_centre(votes)
     assert n == 3 and np.allclose(centre, [-3.3, -67.9, 13.3], atol=0.11) and (spread < 0.3).all()
+
+
+def test_every_mirror_of_a_side_or_end_view_gets_the_same_names():
+    """Side view: +x right, +y down. End view: +x towards the camera (down), +y left. Whichever mirror a label came in."""
+    w, h, L, Wd = 1920, 1080, 61.0, 26.0
+    side = C.pose_to_H(np.array([[L / 2, -20.0, 15.0, 0.0, np.radians(25), 1500.0]]), w, h)[0]
+    end = C.pose_to_H(np.array([[L + 12.0, Wd / 2, 10.0, np.radians(-90), np.radians(20), 1500.0]]), w, h)[0]
+    fx = np.array([[-1.0, 0, L], [0, 1, 0], [0, 0, 1]])
+    fy = np.array([[1.0, 0, 0], [0, -1, Wd], [0, 0, 1]])
+
+    def step(H, a, b):
+        p, q = H @ [*a, 1.0], H @ [*b, 1.0]
+        return q[:2] / q[2] - p[:2] / p[2]
+    for H, x_dir, y_dir in ((side, (1, 0), (0, 1)), (end, (0, 1), (-1, 0))):
+        names = [C.canonical_mirror(H @ S, (L / 2, Wd / 2))[0] for S in (np.eye(3), fx, fy, fx @ fy)]
+        assert all(np.allclose(n, names[0]) for n in names)
+        c = (L / 2, Wd / 2)
+        assert np.dot(step(names[0], c, (c[0] + 1, c[1])), x_dir) > 0 and np.dot(step(names[0], c, (c[0], c[1] + 1)), y_dir) > 0

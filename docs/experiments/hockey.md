@@ -684,3 +684,18 @@ also why the plausibility gate does not help there (the answers are real cameras
 **Decision:** keep A1 as the working model. The end-view symmetry has to be settled before these answers are usable:
 either a naming rule for end views (e.g. the zone the camera sits behind is always zone B), applied to the labels and to
 `canonicalize`, or the planned temporal resolution from the tracker. The gate's advantage on the side views remains.
+
+## 14g. One naming rule for side and end views - `core.camera.canonical_mirror` (2026-09-25)
+
+**Why:** section 14f - the model learned the end view but named it at random, because `canonicalize` ("zone A on the
+image left") is undefined when the rink's long axis runs up the image, and the end-view labels came in all 4 mirrors.
+**Rule** (sport-agnostic, for any field symmetric in x and y; hockey's `build_h_index.canonicalize` now calls it):
+measured at the field centre - side view (long axis within 45 degrees of the image horizontal): +x right, +y down, the
+old hockey convention unchanged; end view: +x down (the end the camera sits behind is zone B) and +y left, the side rule
+turned a quarter. It names the view, not the arena: which physical end a frame shows still needs context (the tracker,
+or asymmetric markings such as the referee crease).
+**Effect on the index** (rebuilt; previous one in `scratch_frames/hockey_h_before_endrule.jsonl`): 33 labels renamed,
+28 of them end views (20 end-view train labels, 6 dev, 2 test). The 24 pairs of end-view labels 0.5 s apart in one shot
+now all carry the same names (the best-matching mirror is the identity for every pair). Side views: 5 renamed (long
+axis close to 45 degrees at the field centre). Next: retrain model A on it and score the end views as named.
+

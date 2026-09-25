@@ -21,7 +21,7 @@ from collections import Counter
 import cv2
 import numpy as np
 
-from sportcal.core.camera import is_plausible_view
+from sportcal.core.camera import canonical_mirror, is_plausible_view
 from sportcal.core.labels import read_label
 from sportcal.lab.hockey.make_line_masks import fit_from_label
 from sportcal.paths import DATASETS, ROOT
@@ -39,23 +39,12 @@ RELABELLED = "hockeyrink_nhl_audit"      # hockeyrink_nhl frames hand-labelled a
 
 
 def canonicalize(H, p):
-    """(H, flips): H mirrored so that zone A (low x) sits on the image left and the y = 0 boards (the far side) above the
-    y = W ones - the orientation of nearly every hand label. The rink is symmetric in x and in y, so two labels that differ
-    by a mirror draw the same lines while every keypoint and line swaps its name: poison for a model that predicts named
-    points. The click labeller only fixes x (click_labeler docstring); the index fixes both. The referee crease is the
-    one marking that is not y-symmetric: the template puts it at y = W, which after this is always the camera side."""
-    L, W = p["length"], p["width"]
-
-    def img(H, x, y):
-        q = H @ np.array([x, y, 1.0])
-        return q[:2] / q[2]
-
-    flips = ""
-    if img(H, L / 2 + 5, W / 2)[0] < img(H, L / 2 - 5, W / 2)[0]:
-        H, flips = H @ np.array([[-1.0, 0, L], [0, 1, 0], [0, 0, 1]]), flips + "x"
-    if img(H, L / 2, W / 2 - 5)[1] > img(H, L / 2, W / 2 + 5)[1]:
-        H, flips = H @ np.array([[1.0, 0, 0], [0, -1, W], [0, 0, 1]]), flips + "y"
-    return H / H[2, 2], flips
+    """(H, flips): H renamed to the one image convention of `core.camera.canonical_mirror` - side views: zone A (low x)
+    on the image left, the y = 0 boards (the far side) above the y = W ones; end views: the zone the camera sits behind
+    is zone B, y = 0 on the image right. The rink is symmetric in x and in y, so two labels that differ by a mirror draw
+    the same lines while every keypoint and line swaps its name: poison for a model that predicts named points. The
+    referee crease is the one marking that is not y-symmetric: the template puts it at y = W."""
+    return canonical_mirror(H, (p["length"] / 2, p["width"] / 2))
 
 
 def video_of(stem):
