@@ -1,9 +1,11 @@
 # ponytail: this prototype is module-level script code (loads models, opens the video, overwrites
 # tracking_log.csv / tracked_out.mp4). Ceiling: it cannot be imported or tested. Upgrade: split into
-# main() on top of sportcal.product.pipeline. Until then refuse to run by accident (an import once ran it).
+# main(). Until then refuse to run by accident (an import once ran it). The rink calibration is the product
+# pipeline (build_pipeline, ADR 0003).
 if __name__ != "__main__":
     raise ImportError("hockey_demo is a script: run `python -m sportcal.product.hockey_demo`")
 
+import argparse
 import csv
 import os
 
@@ -24,7 +26,15 @@ from scenedetect.common import FrameTimecode
 from scenedetect.detectors import ContentDetector
 from scenedetect.scene_manager import compute_downscale_factor
 
+from sportcal.paths import RUNS
+from sportcal.product.hockey import build_pipeline
 from sportcal.sports.hockey import rink
+
+ap = argparse.ArgumentParser(description="Detection + tracking + rink calibration (product pipeline) + minimap video.")
+ap.add_argument("video", nargs="?", default="clip2.mp4")
+ap.add_argument("--device", default="cuda:0", help="cuda:0 or cpu")
+ap.add_argument("--max-frames", type=int, default=0, help="stop after this many frames (0: whole video)")
+args = ap.parse_args()
 
 # rangos derivados de hsv_scan.csv (percentiles 2-98 de los frames de camara
 # principal); ver analisis: h,s muy estables por la iluminacion fija del hielo
@@ -32,14 +42,11 @@ MAIN_CAMERA_H_RANGE = (120, 126)
 MAIN_CAMERA_S_RANGE = (11, 12)
 MAIN_CAMERA_V_RANGE = (150, 217)
 
-# por debajo de esto un keypoint del rink no se dibuja ni cuenta como valido
-KEYPOINT_CONF_THRESHOLD = 0.5
-# 4 puntos bastan para una homografia, pero con tan pocos cualquier keypoint mal
-# colocado la arruina; con 6 el RANSAC tiene margen para descartar alguno
-MIN_KEYPOINTS_FOR_HOMOGRAPHY = 6
+# rink calibration model (ADR 0003) and how many frames the last H is kept when it refuses
+KPLINE_WEIGHTS = RUNS / "kpline" / "finetune" / "best_h.pt"
+HOLD_FRAMES = 15
 
 RINK = rink.RINK_NHL
-RINK_TEMPLATE = rink.build_template(RINK)
 
 
 def is_main_camera(h_med, s_med, v_med):
@@ -115,8 +122,8 @@ def classify_team(hist, centroids):
 
 
 def load_model(local_relpath, hf_repo, hf_file):
-    """Prefiere los pesos reentrenados en local (training/); si no existen, HuggingFace."""
-    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), local_relpath)
+    """Prefiere los pesos reentrenados en local (runs/); si no existen, HuggingFace."""
+    local = os.path.join(RUNS, local_relpath)
     if os.path.exists(local):
         print(f"[modelo] pesos locales: {local}")
         return YOLO(local)
@@ -124,12 +131,8 @@ def load_model(local_relpath, hf_repo, hf_file):
     return YOLO(hf_hub_download(hf_repo, hf_file))
 
 
-# cada cuantos frames se re-ejecuta el modelo de keypoints del rink (la camara
-# es casi estatica dentro de un plano); entre medias se reusa la ultima homografia
-RINK_EVERY = 1
-
 yolo = load_model(
-    "runs/hockeyai/yolo26s/weights/best.pt",
+    "hockeyai/yolo26s/weights/best.pt",
     "SimulaMet-HOST/HockeyAI", "HockeyAI_model_weight.pt",
 )
 CLASS_NAME_TO_ID = {name: cid for cid, name in yolo.names.items()}
@@ -140,14 +143,12 @@ CLASS_REFEREE = CLASS_NAME_TO_ID["referee"]
 # unicas clases con un "rol" de partido; el resto (faceoff/goal/centroide son
 # marcas de la pista, no entidades en juego) no se proyecta a la homografia
 ROLE_CLASSES = frozenset({CLASS_PUCK, CLASS_GOALIE, CLASS_REFEREE, CLASS_PLAYER})
-rink_model = load_model(
-    "runs/hockeyrink/yolo26m-8/weights/best.pt",
-    "SimulaMet-HOST/HockeyRink", "HockeyRink.pt",
-)
+# no YOLO fallback: a refused frame keeps the last H (hold) rather than take an answer ~100 px off (ADR 0003)
+rink_pipeline = build_pipeline(None, kpline_weights=KPLINE_WEIGHTS, hold_frames=HOLD_FRAMES, device=args.device)
 tracker = ByteTrackTracker()
 scene_detector = ContentDetector()
 
-cap = cv2.VideoCapture("clip2.mp4")
+cap = cv2.VideoCapture(args.video)
 if not cap.isOpened():
     raise IOError("no se pudo abrir el video")
 
@@ -194,12 +195,8 @@ shot_camera_label = None  # texto a mostrar; None mientras se acumulan muestras 
 # minimapa cenital sobre el que se pintan los jugadores proyectados
 minimap_base, minimap_to_img = rink.minimap_base(RINK)
 mm_h, mm_w = minimap_base.shape[:2]
-# la homografia del frame anterior sirve de respaldo cuando en un frame se ven
-# pocos keypoints; se descarta al cambiar de plano, que invalida la calibracion
+# imagen -> pista (m) del frame actual, o None si no hay calibracion
 last_homography = None
-# keypoints del rink de la ultima ejecucion (se re-ejecuta cada RINK_EVERY frames);
-# se redibujan cada frame desde aqui para que el overlay no parpadee
-rink_kpts_cache: tuple[list, list] = ([], [])
 
 # calibracion de equipos por color de camiseta: es global al video (los
 # equipos no cambian de plano a plano), se hace una vez con las primeras
@@ -217,7 +214,7 @@ puck_trail = deque(maxlen=PUCK_TRAIL_LEN)
 hsv_log_path = "hsv_scan.csv"
 hsv_log_file = open(hsv_log_path, "w", newline="")
 hsv_log = csv.writer(hsv_log_file)
-hsv_log.writerow(["frame_idx", "h_median", "s_median", "v_median", "is_main_camera", "scene_cut", "rink_keypoints_ok"])
+hsv_log.writerow(["frame_idx", "h_median", "s_median", "v_median", "is_main_camera", "scene_cut", "rink_method"])
 
 # tracking persistente en coordenadas de pista (metros): una fila por jugador y
 # frame mientras haya homografia valida. shot_id identifica el plano continuo,
@@ -234,7 +231,7 @@ try:
     with tqdm(total=total_frames, unit="frame") as pbar:
         while True:
             ret, frame = cap.read()
-            if not ret:
+            if not ret or (args.max_frames and frame_idx >= args.max_frames):
                 break  # se acabaron los frames
 
             small_frame = cv2.resize(frame, scene_detect_size, interpolation=cv2.INTER_LINEAR)
@@ -245,8 +242,7 @@ try:
                 tracker = ByteTrackTracker()
                 shot_samples = []
                 shot_camera_label = None
-                last_homography = None
-                rink_kpts_cache = ([], [])
+                rink_pipeline.reset()  # the held H belongs to the previous shot
                 puck_trail.clear()
                 shot_id += 1
 
@@ -269,7 +265,7 @@ try:
             # marginales (conf media 0.44, max 0.68 en la muestra probada) -- la
             # degradacion real empieza en 640 (ahi si se pierden detecciones de
             # hasta 0.89 de confianza)
-            yolo_predictions = yolo.predict(source=frame, conf=0.25, imgsz=800, verbose=False, device=0)
+            yolo_predictions = yolo.predict(source=frame, conf=0.25, imgsz=800, verbose=False, device=args.device)
             detections = sv.Detections.from_ultralytics(yolo_predictions[0])
             tracked = tracker.update(detections=detections)
             assert tracked.tracker_id is not None and tracked.class_id is not None
@@ -327,41 +323,14 @@ try:
             camera_color = (0, 200, 0) if main_camera else (0, 0, 200)
             cv2.putText(annotated, camera_label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, camera_color, 2)
 
-            # el modelo de keypoints del rink es caro y la camara es casi estatica
-            # dentro de un plano, asi que solo se re-ejecuta cada RINK_EVERY frames
-            # (o de inmediato si no hay homografia valida, p.ej. tras un corte de plano)
-            if frame_idx % RINK_EVERY == 0 or last_homography is None:
-                rink_result = rink_model.predict(source=frame, verbose=False, device=0)[0]
-                good_ids, good_xy = [], []
-                if rink_result.keypoints is not None and rink_result.keypoints.xy.shape[0] > 0:
-                    kpts_xy = rink_result.keypoints.xy[0].cpu().numpy()
-                    kpts_conf = rink_result.keypoints.conf[0].cpu().numpy()
-                    for idx, ((x, y), conf) in enumerate(zip(kpts_xy, kpts_conf)):
-                        if conf < KEYPOINT_CONF_THRESHOLD:
-                            continue
-                        good_ids.append(idx)
-                        good_xy.append((x, y))
-                rink_kpts_cache = (good_ids, good_xy)
-
-                # imagen -> pista: emparejamos cada keypoint detectado con su gemelo
-                # del template y estimamos la homografia del plano del hielo
-                if len(good_ids) >= MIN_KEYPOINTS_FOR_HOMOGRAPHY:
-                    homography, _ = cv2.findHomography(
-                        np.asarray(good_xy, np.float32),
-                        RINK_TEMPLATE[good_ids].astype(np.float32),
-                        cv2.RANSAC, 10.0,
-                    )
-                    if homography is not None:
-                        last_homography = homography
-
-            # se redibujan cada frame desde la cache para que el overlay no parpadee
-            good_ids, good_xy = rink_kpts_cache
-            n_keypoints_ok = len(good_ids)
-            for kid, (x, y) in zip(good_ids, good_xy):
-                cv2.circle(annotated, (int(x), int(y)), 4, (0, 255, 255), -1)
-                cv2.putText(annotated, str(kid), (int(x) + 6, int(y) - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
-            cv2.putText(annotated, f"rink kpts: {n_keypoints_ok}/56", (10, 60),
+            # calibracion de la pista: H mundo -> imagen del producto; se dibujan las lineas de la
+            # plantilla proyectadas para ver a ojo si encajan con las pintadas en el hielo
+            est = rink_pipeline(frame)
+            last_homography = None if est is None else np.linalg.inv(est.H)
+            rink_method = "sin calibrar" if est is None else est.method
+            if est is not None:
+                rink.draw_rink(annotated, est.H, RINK, (0, 255, 255), 1)
+            cv2.putText(annotated, f"pista: {rink_method}", (10, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
             if last_homography is not None:
@@ -421,7 +390,7 @@ try:
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (30, 30, 30), 1)
                 annotated[frame_height - mm_h - 10:frame_height - 10, 10:10 + mm_w] = minimap
 
-            hsv_log.writerow([frame_idx, h_med, s_med, v_med, int(main_camera), int(bool(cuts)), n_keypoints_ok])
+            hsv_log.writerow([frame_idx, h_med, s_med, v_med, int(main_camera), int(bool(cuts)), rink_method])
 
             write_queue.put(annotated)
 

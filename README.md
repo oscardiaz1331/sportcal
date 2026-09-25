@@ -36,6 +36,9 @@ if est:
     xy_m, inside = project_to_field(est, feet_px, sports.get("hockey-nhl"))
 ```
 
+Whole video with detection, tracking, the rink lines drawn from the estimated H and a minimap (writes `tracked_out.mp4`,
+`tracking_log.csv`): `python -m sportcal.product.hockey_demo nhl11.mp4 [--max-frames 600] [--device cpu]`.
+
 ## Where to read next
 
 * [docs/architecture.md](docs/architecture.md) - layers, dependency rules, how to add a sport / experiment / product method

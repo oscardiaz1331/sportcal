@@ -108,15 +108,16 @@ class KplineEstimator:
         return Estimate(H, 1.0, self.name)  # the gate is yes/no: no graded confidence to report
 
 
-def build_pipeline(yolo_weights, seg_weights=None, sport="hockey-nhl", hold_frames=0, kpline_weights=None):
+def build_pipeline(yolo_weights, seg_weights=None, sport="hockey-nhl", hold_frames=0, kpline_weights=None,
+                   device="cuda:0"):
     """Hockey composition (ADR 0003), first answer wins: the keypoint + line model, segmentation-DLT, YOLO keypoints as
     the full-coverage fallback. Each stage is skipped when its weights are None."""
     stages = []
     if kpline_weights is not None:
-        stages.append(KplineEstimator(kpline_weights, sport=sport))
+        stages.append(KplineEstimator(kpline_weights, sport=sport, device=device))
     if seg_weights is not None:
         stages.append(SegDltEstimator(seg_weights, rink_params=rink.RINK_NHL if sport == "hockey-nhl"
-                                      else rink.RINK_IIHF))
+                                      else rink.RINK_IIHF, device=device))
     if yolo_weights is not None:
-        stages.append(YoloKeypointEstimator(yolo_weights, sport=sport))
+        stages.append(YoloKeypointEstimator(yolo_weights, sport=sport, device=device))
     return HomographyPipeline(stages, hold_frames=hold_frames)
