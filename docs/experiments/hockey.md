@@ -714,3 +714,13 @@ nhl9 (outdoor) is still wrong and the gate still removes most of its answers.
 **Decision:** A2 is the working model (`runs/kpline/finetune`; A0 and A1 kept as `*-A0`, `*-A1`). Open: nhl9, and the
 keypoint-count / plausibility gates, still to be confirmed on frames they were not chosen on.
 
+## 14h. A "fresh" set from 4 new games, to confirm the gates (2026-09-25)
+
+**Why:** the keypoint-count gate (section 14) and the plausibility gate (section 14d) were both read off `test`; they
+need frames nothing was chosen on. **Videos:** nhl11-nhl14, 4 minutes each (`fetch_clips --first-index 11`), new
+arenas. **Queue** (`queue_fresh`): shots cut from a grey thumbnail, kept where the HockeyRink detector sees the rink,
+the middle of each shot plus one frame every 10 s inside long shots, 10 per game spread over the clip - 40 frames, none
+picked by our own models. A look at the sheet: side and end views of every game, one close-up that slipped through
+(nhl11 frame 8052, to skip). Labels go to `hockeyrink_nhl_fresh`, split `fresh` (never train or test, and a saved
+proposal is excluded), clicked by hand with no model proposal, so the set stays independent of what it measures.
+
