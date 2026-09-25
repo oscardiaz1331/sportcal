@@ -658,3 +658,29 @@ H extrapolates (no hand click there); neither H matches that circle's outer edge
 **Decision:** n = 1, not a measure of Claude as a labeller. The failure mode that matters is identity, not pixels: a
 wrong name costs tens of px and only a residual check or a human catches it. Claude's clicks stay candidates for a
 human to accept, never labels on their own.
+
+## 14f. Model A retrained with the end-view labels ("A1", 2026-09-25)
+
+**Setup:** section 14 unchanged (pretrain 60 epochs + fine-tune 30), on the index rebuilt in section 14e (36 end-view
+labels in train, the 11 impossible stored labels out). Compared with the previous model ("A0", `runs/kpline/*-A0`) on
+the new 72-frame `test`; errors as in section 14 (names as labelled), plus "any mirror": the error with the label taken
+in whichever of the rink's 4 mirrors fits best - the end-view labels were named without one convention (section 14b),
+so a geometrically right end-view answer can carry the other mirror's names.
+
+| model | coverage | p50 | < 25 px | > 50 px | nhl10 cov / p50 | nhl4 cov / p50 | nhl4 < 25 px, any mirror | nhl9 cov / p50 |
+|---|---|---|---|---|---|---|---|---|
+| A0 | 79% | 9.2 | 60% | 13 | 100% / 7.2 | 59% / 7.0 | 47% | 65% / 512 |
+| A1 | 89% | 11.2 | 61% | 18 | 100% / 6.6 | 100% / 85 | **76%** | 65% / 321 |
+| A0, `--gate` | 62% | 7.0 | 60% | 1 | 100% / 7.2 | 47% / 6.5 | - | 22% / 24 |
+| A1, `--gate` | 74% | 8.8 | 61% | 7 | 100% / 6.6 | 82% / 11.0 | - | 30% / 15 |
+
+(Evaluated on CPU from the same weights; the owner's GPU run of A1 gave the same figures within a frame or two.)
+
+The 6 end-view `test` frames (nhl4): A0 answered 1 of 6 (wrong); A1 answers all 6, and with any mirror 5 of them are
+1.9, 8.0, 13.3, 18.1 and 31.8 px off, one is 416 px off. As named they are 260-415 px off: **the network learned the end
+view; what it cannot learn is which end is which, because the training labels do not say it consistently.** That is
+also why the plausibility gate does not help there (the answers are real cameras, just renamed). nhl10 is unchanged
+(p50 7.2 -> 6.6).
+**Decision:** keep A1 as the working model. The end-view symmetry has to be settled before these answers are usable:
+either a naming rule for end views (e.g. the zone the camera sits behind is always zone B), applied to the labels and to
+`canonicalize`, or the planned temporal resolution from the tracker. The gate's advantage on the side views remains.
