@@ -698,4 +698,19 @@ or asymmetric markings such as the referee crease).
 28 of them end views (20 end-view train labels, 6 dev, 2 test). The 24 pairs of end-view labels 0.5 s apart in one shot
 now all carry the same names (the best-matching mirror is the identity for every pair). Side views: 5 renamed (long
 axis close to 45 degrees at the field centre). Next: retrain model A on it and score the end views as named.
+**Result - model "A2"** (section 14 recipe retrained on this index; owner's GPU run, 2026-09-25), 72-frame `test`:
+
+| model | coverage | p50 | p90 | < 10 px | < 25 px | nhl10 cov / p50 / < 25 | nhl4 cov / p50 / < 25 | nhl9 cov / p50 / < 25 |
+|---|---|---|---|---|---|---|---|---|
+| A0 (section 14f) | 79% | 9.2 | - | 44% | 60% | 100% / 7.2 / 97% | 59% / 7.0 / 47% | 65% / 512 / 17% |
+| A1 (section 14f) | 89% | 11.2 | - | 39% | 61% | 100% / 6.6 / 94% | 100% / 85 / 47% | 65% / 321 / 26% |
+| **A2** | 83% | **8.2** | 269 | **54%** | **67%** | 100% / 7.0 / 97% | 94% / **6.3** / **88%** | 52% / 292 / 9% |
+| **A2, `--gate`** | 76% | **7.2** | **65** | 54% | 67% | 100% / 7.0 / 97% | 94% / 6.3 / 88% | 30% / 248 / 9% |
+
+(A0 and A1 were scored before the rule renamed 2 end-view `test` labels; with the rule they only get the "any mirror"
+credit of section 14f, 76% < 25 px for A1 on nhl4.) The rule is what made the end-view data usable: nhl4, the video
+with the 6 end-view `test` frames, goes from 47% to 88% of frames within 25 px, named as labelled, while nhl10 holds.
+nhl9 (outdoor) is still wrong and the gate still removes most of its answers.
+**Decision:** A2 is the working model (`runs/kpline/finetune`; A0 and A1 kept as `*-A0`, `*-A1`). Open: nhl9, and the
+keypoint-count / plausibility gates, still to be confirmed on frames they were not chosen on.
 
