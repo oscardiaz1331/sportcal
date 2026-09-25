@@ -47,7 +47,7 @@ class HomographyPipeline:
     """
 
     def __init__(self, estimators: Sequence[Estimator], hold_frames: int = 0, smooth: Optional[float] = None,
-                 max_jump_px: float = 150.0, accept_after: int = 5):
+                 max_jump_px: float = 300.0, accept_after: int = 5):
         if not estimators:
             raise ValueError("at least one estimator is required")
         self.estimators = list(estimators)
@@ -78,7 +78,8 @@ class HomographyPipeline:
         prior = self._carry(frame)
         if e is not None and prior is not None and self.smooth is not None:
             h, w = frame.shape[:2]
-            H, gap = blend_homographies(prior.H, e.H, self.smooth, w, h)
+            # every frame held without an answer is one missed correction: the carried H has drifted for that long
+            H, gap = blend_homographies(prior.H, e.H, 1 - (1 - self.smooth) ** (1 + self._age), w, h)
             if gap * REF_WIDTH / w <= self.max_jump_px:
                 e, self._jumps = replace(e, H=H, method=e.method + "+klt"), 0
             elif self._jumps < self.accept_after:

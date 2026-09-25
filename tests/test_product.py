@@ -67,9 +67,9 @@ def test_default_is_no_hold():
 
 def test_smoothing_follows_the_camera_averages_the_noise_and_rides_out_jumps():
     """A camera panning 3 px/frame over a textured scene; the estimator answers the true H plus +-6 px of noise, once
-    150 px off, from frame 32 on 100 px off for good (a missed cut), then refuses for longer than the hold. Smoothed along
-    the KLT motion, the output stays within a few px, ignores the one-off jump, takes the persistent one after
-    `accept_after` frames, and starts afresh once the hold has run out."""
+    300 px off, from frame 32 on 200 px off for good (a missed cut), then refuses for 5 frames and for longer than the
+    hold. Smoothed along the KLT motion, the output stays within a few px, ignores the one-off jump, takes the persistent
+    one after `accept_after` frames, trusts an answer more after a hold, and starts afresh once the hold has run out."""
     import cv2
     rng = np.random.default_rng(0)
     scene = cv2.GaussianBlur((rng.random((600, 1200)) * 255).astype(np.uint8), (0, 0), 1.5)
@@ -77,13 +77,16 @@ def test_smoothing_follows_the_camera_averages_the_noise_and_rides_out_jumps():
 
     def shift(dx, dy=0.0):
         return np.array([[1, 0, dx], [0, 1, dy], [0, 0, 1.0]])
-    frames = [cv2.warpPerspective(scene, shift(-3.0 * t), (960, 540)) for t in range(56)]
-    truth = [shift(-3.0 * t) @ H for t in range(56)]
-    noise = rng.uniform(-6, 6, (56, 2))
-    noise[25] = (150, 0)
-    noise[32:, 0] += 100
+    frames = [cv2.warpPerspective(scene, shift(-3.0 * t), (960, 540)) for t in range(66)]
+    truth = [shift(-3.0 * t) @ H for t in range(66)]
+    noise = rng.uniform(-6, 6, (66, 2))
+    noise[25] = (300, 0)
+    noise[32:, 0] += 200
+    noise[40:48] = (200, 0)
+    noise[47] = (220, 0)                  # the first answer after the 5-frame refusal, 20 px off
     answers = [Estimate(shift(*n) @ Ht, 1.0, "noisy") for n, Ht in zip(noise, truth)]
-    answers[40:54] = [None] * 14
+    answers[42:47] = [None] * 5
+    answers[50:64] = [None] * 14
     pipe = HomographyPipeline([Fake("noisy", answers)], hold_frames=10, smooth=0.1)
     out = [pipe(f) for f in frames]
 
@@ -92,8 +95,9 @@ def test_smoothing_follows_the_camera_averages_the_noise_and_rides_out_jumps():
     raw = [err(a.H, t) for a, t in zip(answers[10:32], truth[10:32])]
     smoothed = [err(o.H, t) for o, t in zip(out[10:32], truth[10:32])]
     assert np.median(smoothed) < np.median(raw) / 2 and max(smoothed) < 10   # frame 25's jump never shows
-    assert err(out[39].H, shift(100) @ truth[39]) < 10                         # the persistent offset is taken
-    assert out[54].method == "noisy"                                           # no stale prior after the hold ran out
+    assert err(out[39].H, shift(200) @ truth[39]) < 10                         # the persistent offset is taken
+    assert err(out[47].H, shift(200) @ truth[47]) > 5    # after 5 held frames the answer pulls ~half way, not 10%
+    assert out[64].method == "noisy"                                           # no stale prior after the hold ran out
 
 
 def test_pipeline_requires_an_estimator():

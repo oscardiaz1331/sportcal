@@ -21,7 +21,7 @@ Optional `hold_frames` reuses the last H when every stage refuses (camera nearly
 `pipeline.reset()` at shot cuts.
 
 **On video, pass `smooth=0.1`.** Each answer is then blended into the previous H carried along the camera motion (KLT),
-and a hold follows the camera instead of freezing: frame-to-frame jitter falls from 29.6 to 2.8 px (p50), with the same
+and a hold follows the camera instead of freezing: frame-to-frame jitter falls from 29.6 to 3.1 px (p50), with the same
 or slightly better accuracy than per-frame answers (`experiments/hockey.md` section 14i). Leave it `None` for single
 images.
 

@@ -751,9 +751,10 @@ of error per frame move the whole projected rink from one frame to the next.
 **Method:** a complementary filter. The camera motion between consecutive frames (`core.motion.estimate_motion`, KLT
 over the whole frame, one homography by RANSAC at 1 working px) carries the last output to the new frame, and the new
 answer only pulls it a fraction `smooth` of the way (`core.geometry.blend_homographies`, mixed on the image of the
-frame's inner quad). An answer more than 150 px (at 1920, largest distance on that quad) away from the carried H counts
+frame's inner quad). An answer more than 300 px (at 1920, largest distance on that quad) away from the carried H counts
 as a refusal unless it persists for more than 5 frames (a missed cut), which resets the filter. A hold follows the
-camera instead of freezing.
+camera instead of freezing, and after `n` held frames the next answer weighs `1 - (1 - smooth)^(n + 1)`: the carried
+H has gone `n` frames without a correction.
 **Measure:** the 38 `fresh` labels of section 14h, each with the 30 frames before it (960 px JPG, matched to the label
 image by pixels), model A2 answers cached per frame. Error at the labelled frame against the hand label (section 14
 measure), and jitter: for each pair of consecutive frames, the largest distance on the frame's inner quad between the
@@ -763,10 +764,9 @@ explain (px at 1920). Holds and resets are counted over the 1178 frames.
 | smooth | answered | p50 | p90 | < 10 px | max | jitter p50 | jitter p90 | holds | resets |
 |---|---|---|---|---|---|---|---|---|---|
 | none (per frame) | 37/38 | 5.9 | 10.7 | 31 | 17 | 29.6 | 104.3 | - | - |
-| 0.05 | 37/38 | 6.7 | 10.9 | 32 | 13 | 1.5 | 4.0 | 52 | 4 |
-| **0.1** | 37/38 | 6.3 | **9.6** | **35** | **11** | 2.8 | 7.7 | 41 | 3 |
-| 0.2 | 37/38 | 6.6 | 9.6 | 33 | 12 | 5.1 | 15.2 | 36 | 3 |
-| 0.3 | 37/38 | 6.5 | 10.7 | 30 | 21 | 7.6 | 22.1 | 40 | 3 |
+| 0.05 | 37/38 | 6.7 | 11.6 | 29 | 13 | 1.7 | 5.5 | 7 | 1 |
+| **0.1** | 37/38 | 6.6 | **9.7** | **34** | **11** | 3.1 | 9.5 | 7 | 1 |
+| 0.2 | 37/38 | 6.6 | 10.5 | 32 | 12 | 5.9 | 16.9 | 7 | 1 |
 
 **Two settings that looked harmless were not:**
 
@@ -777,10 +777,14 @@ explain (px at 1920). Holds and resets are counted over the 1178 frames.
   10.7, max 45 / 47 px at the 3 px threshold).
 * The jump limit. At 40 px, normal answer noise on the far corners of the quad crossed it: 40% of the frames became
   holds and the filter reset 35 times (a visible jump each time) - its low jitter came from ignoring the model, not
-  from filtering it. At 150 px: 3.5% holds, 3 resets. 100 and 300 px give similar numbers.
+  from filtering it. At 150 px the sequences look fine (3.5% holds, 3 resets, p90 9.6 px), but on nhl11 (the demo,
+  frames 139-161 of the cut from 60 s) a fast pan into a close view, where the model refuses most frames, left the
+  carried H ~40 px off on the ice; the few answers, which were right (checked on overlays), sat 150-160 px away on the
+  quad, were refused, and the hold ran out into 8 uncalibrated frames. Hence 300 px and the heavier first answer after
+  a hold.
 
-**Decision:** `smooth=0.1` in the demo and for video (ADR 0003): jitter p50 from 29.6 to 2.8 px, accuracy the same or
-slightly better than per frame (4 more frames under 10 px, max 17 -> 11 px). Single images keep `smooth=None` (the
+**Decision:** `smooth=0.1` in the demo and for video (ADR 0003): jitter p50 from 29.6 to 3.1 px, accuracy the same or
+slightly better than per frame (3 more frames under 10 px, max 17 -> 11 px). Single images keep `smooth=None` (the
 filter needs consecutive frames).
 **Caveats:** 30-frame sequences, so drift over a long shot is corrected continuously but not measured beyond that. The
 jitter reference is the same KLT motion the filter uses, so a wrong motion would not show in it; the error at the
