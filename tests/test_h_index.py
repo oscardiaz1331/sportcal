@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
-from sportcal.lab.hockey.build_h_index import EXTRA, HAND, HOLDOUT_VIDEOS, canonicalize, split_of, video_of
+from sportcal.lab.hockey.build_h_index import EXTRA, FRESH, HAND, HOLDOUT_VIDEOS, canonicalize, split_of, video_of
 from sportcal.paths import ROOT
 from sportcal.sports.hockey import rink
 
@@ -22,6 +22,7 @@ def test_held_out_videos_never_reach_train_or_dev():
     assert split_of(HAND, "val", "nhl5") == "test_leaky"
     assert (split_of("hockeyrink_nhl", "train", "nhl5"), split_of("hockeyrink_nhl", "val", "nhl5")) == ("train", "dev")
     assert split_of("hockeyrink_nhl", "train", "nhl5", hand=True) == "train"
+    assert [split_of(FRESH, "val", "nhl11", hand=True), split_of(FRESH, "val", "nhl11", propagated=True)] == ["fresh", "excluded"]
     for ds in (HAND, *EXTRA):                  # a label carried from another one by the labeller is never a test frame
         assert [split_of(ds, "val", v, propagated=True) for v in ("nhl4", "nhl5")] == ["excluded", "train"]
     assert split_of(EXTRA[0], "val", "nhl5") == "train" and split_of(EXTRA[0], "val", "nhl4") == "test"

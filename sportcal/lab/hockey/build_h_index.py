@@ -34,6 +34,7 @@ PARAMS = {"hockey-nhl": rink.RINK_NHL, "hockey-iihf": rink.RINK_IIHF}
 TEMPLATES = {k: rink.build_template(p) for k, p in PARAMS.items()}
 FITTED = (("hockeyrink_nhl", "hockey-nhl"), ("hockeyrink", "hockey-iihf"))
 HAND = "hockeyrink_nhl_valh"             # new frames, hand-labelled
+FRESH = "hockeyrink_nhl_fresh"     # hand labels of games no model or gate was ever tuned on: split "fresh"
 EXTRA = ("hockeyrink_nhl_endview",)      # new frames hand-labelled for training (views the train set lacks)
 RELABELLED = "hockeyrink_nhl_audit"      # hockeyrink_nhl frames hand-labelled again
 
@@ -56,6 +57,8 @@ def video_of(stem):
 def split_of(dataset, orig_split, video, hand=False, propagated=False):
     """Per-video split: a held-out video only ever lands in the test sets (a hand label from it is a test frame). A label
     the click labeller carried from another one (`click_labeler.propaga`) is never a test frame."""
+    if dataset == FRESH:
+        return "excluded" if propagated else "fresh"
     if propagated:
         return "excluded" if video in HOLDOUT_VIDEOS else "train"
     if dataset == HAND:
@@ -125,7 +128,7 @@ def build():
                     continue
                 rows.append(_row(dataset, lbl.stem, img, w, h, template, source, fit[0],
                                  {"inliers": len(fit[1]), "resid_px": round(float(info), 2)}, orig_split))
-    for dataset in (HAND, *EXTRA):
+    for dataset in (HAND, FRESH, *EXTRA):
         for (video, frame), (H, source) in sorted(_hand_labels(dataset).items()):
             stem = "{}_{:06d}".format(video, frame)
             img = DATASETS / dataset / "images" / "val" / (stem + ".jpg")
