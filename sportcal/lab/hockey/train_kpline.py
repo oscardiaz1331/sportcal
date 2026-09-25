@@ -292,8 +292,9 @@ def main():
         errs = evaluate(model, rows, device, kp, gate=args.gate)
     for r, e in zip(rows, errs):
         print("{:<40} {:>8.1f}".format(r["id"], e))
-    for v in sorted({r["video"] for r in rows}):
-        print("  {:<6} {}".format(v, summary(errs[[r["video"] == v for r in rows]])))
+    if rows and "video" in rows[0]:            # soccer rows carry no "video" field
+        for v in sorted({r["video"] for r in rows}):
+            print("  {:<6} {}".format(v, summary(errs[[r["video"] == v for r in rows]])))
     print("{} ({} frames): {}".format(args.split, len(rows), summary(errs)))
 
 

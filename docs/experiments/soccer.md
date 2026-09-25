@@ -537,7 +537,7 @@ pillow matplotlib`, download `SV_kp` and `SV_lines` from its v1.0.0 release, the
     <pnlcalib-python> sportcal/lab/soccer/pnlcalib_run.py --pnl-dir ../PnLCalib --weights-dir ../PnLCalib/weights --images datasets/soccer_labels/images --out runs/pnlcalib/soccer_labels_norefine.json --no-refine
     python -m sportcal.lab.soccer.pnlcalib_eval --preds runs/pnlcalib/soccer_labels_norefine.json
 
-## 19. Soccer keypoint + line model: data and pipeline (2026-09-25, not trained yet)
+## 19. Soccer keypoint + line model: data and pipeline (2026-09-25)
 
 **Plan:** hockey's model A recipe (`train_kpline`: named keypoints + straight-line ends as heatmaps, H by points + lines
 DLT, targets rendered from a per-frame H index, exact PTZ augmentation) on the FIFA pitch, trained on the SoccerNet
@@ -563,4 +563,40 @@ segments, 65 channels; runs in `runs/kpline-soccer/`. Perfect targets decode bac
     python -c "from SoccerNet.Downloader import SoccerNetDownloader as D; D(LocalDirectory='D:/SoccerNet').downloadDataTask(task='calibration-2023', split=['train','valid','test'])"
     python -m sportcal.lab.soccer.soccernet_h --root D:/SoccerNet/calibration-2023
     python -m sportcal.lab.hockey.train_kpline --sport soccer --phase pretrain
+    python -m sportcal.lab.hockey.train_kpline --sport soccer --eval runs/kpline-soccer/pretrain/best_h.pt --split test [--gate]
+    python -m sportcal.lab.hockey.train_kpline --sport soccer --eval runs/kpline-soccer/pretrain/best_h.pt --split fresh [--gate]
+
+**Result** (2026-09-25, `runs/kpline-soccer/pretrain/best_h.pt`):
+
+| split | n | source | coverage | p50 | p90 | < 10 px | < 25 px |
+|---|---|---|---|---|---|---|---|
+| test | 1363 | SoccerNet test, no gate | 94% | 6.3 | 17.6 | 68% | 88% |
+| test | 1363 | SoccerNet test, gated | 92% | 6.3 | 16.6 | 68% | 88% |
+| fresh | 18 | our hand labels, no gate | 72% | 10.5 | 16.6 | 33% | 67% |
+| fresh | 18 | our hand labels, gated | 67% | 8.8 | 16.5 | 33% | 67% |
+
+Against PnLCalib on the same 18 `fresh` frames (section 18, base, both clips together): coverage 100%, p50 10.3, p90
+15.3, < 10 px 50%.
+
+**Where the difference is** (per frame; a CPU re-run of the same checkpoint gives the same summary numbers): the 5
+frames the model refuses are exactly the centre-circle views of section 18 (f1500-f1700). It finds 4-5 keypoints and one
+line there, all on the halfway line, so the DLT has no support off that line and returns nothing; PnLCalib answers them
+at 3.3-10.7 px from its points on the circle. The sixth miss, soccer2 f3000 (3 keypoints, 524 px), is the one the
+plausibility gate refuses, and it refuses nothing else. On the 12 frames both answer, the model is at p50 8.8 px against
+PnLCalib's 12.2, < 10 px on 6 frames against 4; per frame it is better by > 5 px on 5 (f850, f1000, soccer2 f0, f450,
+f1500), worse by > 5 px on 1 (f2200), and within the label noise on the other 6. So the gap to PnLCalib is missing
+circle evidence, not a domain shift: where lines are in view, the lines-and-points model already matches or beats it,
+consistent with its SoccerNet `test` numbers.
+
+**Decision:** next step E1, evidence from the circles (the centre circle and penalty arcs), which PnLCalib has and this
+model lacks. The gate refuses the one gross answer and nothing good, the same shape as hockey (sections 14d, 14h of the
+hockey write-up).
+
+**Caveats:**
+
+* `fresh` is 18 frames from two clips (13 `soccer`, 5 `soccer2`): a couple of misses move coverage and p50 by double
+  digits, same small-n caveat as section 18.
+* Pretrain only: the 18 `fresh` labels are the only independent soccer set and stay out of training.
+* Pretrain wall time and per-epoch curve were not captured (run interactively, no log file); only the final
+  checkpoint's eval numbers above are known.
 
