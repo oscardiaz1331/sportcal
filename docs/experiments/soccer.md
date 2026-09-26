@@ -630,3 +630,24 @@ with the derived set all 18 do, p50 1.5 px, max 3.0 px.
     python -m sportcal.lab.common.train_kpline --sport soccer-fifa --eval runs/kpline-soccer/pretrain-derived/best_h.pt --split fresh [--gate]
     python -m sportcal.lab.common.train_kpline --sport soccer-fifa --eval runs/kpline-soccer/pretrain-derived/best_h.pt --split test [--gate]
 
+**Result** (2026-09-26, `runs/kpline-soccer/pretrain-derived/best_h.pt`, 20 epochs, ~2 h; with the gate):
+
+| split | E0 coverage | E0 p50 | E0 < 10 px | E1 coverage | E1 p50 | E1 < 10 px | E1 < 25 px |
+|---|---|---|---|---|---|---|---|
+| test (1363) | 92% | 6.3 | 68% | 92% | 6.5 | 67% | 89% |
+| fresh (18) | 67% | 8.8 | 33% | 72% | 8.8 | 44% | 72% |
+
+Per frame on `fresh` (CPU re-run): one centre-circle view is now answered (f1600, 3.9 px) and soccer2 f3000 (the gross
+one of section 19) is refused; the other 4 centre-circle views are still refused. The new circle channels do respond
+there, but weakly: their maxima are 0.16-0.32, under the 0.3 peak threshold, while the arc apexes reach 0.3-0.4 on the
+wide views. At a 0.2 threshold those 4 views would come out at 2.5-12 px (fresh: 100%, p50 7.6), but that threshold
+was read off `fresh`; on 300 `dev` frames the threshold changes nothing (0.4 / 0.3 / 0.25 / 0.2: coverage 86 / 90 /
+90 / 90%, p50 6.3 / 6.3 / 6.6 / 6.8), so it cannot be chosen there and stays at 0.3.
+**Why the circle channels are weak:** the index (section 19) keeps only frames with at least 4 straight markings - the
+4929 SoccerNet frames it drops are mostly the views where the centre circle is all there is. The model has seen very few
+centre-circle views, and `dev` / `test` contain almost none, so they cannot show the problem either; only `fresh` does.
+**Decision:** E1 kept (same on `test`, better on `fresh`), but the fix is data, not keypoints: bring the dropped
+centre-circle frames into the index. Their SoccerNet annotations have the circle points and 1-3 lines; H can be fitted
+to them by minimising the distance of the annotated circle points to the projected circle plus the line residuals,
+started from this model's own answer at a low threshold and kept only when the annotations agree.
+
