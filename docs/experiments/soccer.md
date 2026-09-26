@@ -555,16 +555,16 @@ circle points p50 6.1 / p75 17 / p90 107 px (arcs are clicked less precisely, an
 follow; on inspection frames with good lines and 6-10 px circles are good labels, 13 px circles go with visibly bent
 far lines). Kept: lines <= 3 px and circles <= 10 px, 57% of the fitted frames (the first run, all points <= 2 px, kept
 37%: 6522 frames). About a fifth of the frames have fewer than 4 straight markings and are not fitted.
-**Model:** `train_kpline --sport soccer`: the 31 named points of `sports/soccer/field.py` and the ends of its 17 straight
+**Model:** `train_kpline --sport soccer-fifa`: the 31 named points of `sports/soccer/field.py` and the ends of its 17 straight
 segments, 65 channels; runs in `runs/kpline-soccer/`. Perfect targets decode back to their H within 2.7-4 px at 1920
 (half-resolution heatmaps over a 105 m pitch).
 
     pip install SoccerNet
     python -c "from SoccerNet.Downloader import SoccerNetDownloader as D; D(LocalDirectory='D:/SoccerNet').downloadDataTask(task='calibration-2023', split=['train','valid','test'])"
     python -m sportcal.lab.soccer.soccernet_h --root D:/SoccerNet/calibration-2023
-    python -m sportcal.lab.hockey.train_kpline --sport soccer --phase pretrain
-    python -m sportcal.lab.hockey.train_kpline --sport soccer --eval runs/kpline-soccer/pretrain/best_h.pt --split test [--gate]
-    python -m sportcal.lab.hockey.train_kpline --sport soccer --eval runs/kpline-soccer/pretrain/best_h.pt --split fresh [--gate]
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --phase pretrain
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --eval runs/kpline-soccer/pretrain/best_h.pt --split test [--gate]
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --eval runs/kpline-soccer/pretrain/best_h.pt --split fresh [--gate]
 
 **Result** (2026-09-25, `runs/kpline-soccer/pretrain/best_h.pt`):
 
@@ -615,7 +615,7 @@ The run was started into `pretrain/` and its first dev evaluation overwrote E0's
 * Pretrain wall time and per-epoch curve were not captured (run interactively, no log file); only the final
   checkpoint's eval numbers above are known.
 
-## 20. E1: keypoints on the circles - `train_kpline --sport soccer --keypoints derived` (2026-09-26)
+## 20. E1: keypoints on the circles - `train_kpline --sport soccer-fifa --keypoints derived` (2026-09-26)
 
 **Why:** section 19 - the 5 `fresh` frames the model refuses are centre-circle views whose keypoints all lie on the
 halfway line. **Change:** `sports/soccer/field.derived_keypoints`: 8 points on the circles no two lines cross (the ends
@@ -626,7 +626,7 @@ epochs as E0; runs go to `runs/kpline-soccer/pretrain-derived`.
 base set 4 of 18 give no H even from perfect heatmaps (f1500, f1550, f1700 - centre-circle views - and soccer2 f3000);
 with the derived set all 18 do, p50 1.5 px, max 3.0 px.
 
-    python -m sportcal.lab.hockey.train_kpline --sport soccer --phase pretrain --keypoints derived --epochs 20
-    python -m sportcal.lab.hockey.train_kpline --sport soccer --eval runs/kpline-soccer/pretrain-derived/best_h.pt --split fresh [--gate]
-    python -m sportcal.lab.hockey.train_kpline --sport soccer --eval runs/kpline-soccer/pretrain-derived/best_h.pt --split test [--gate]
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --phase pretrain --keypoints derived --epochs 20
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --eval runs/kpline-soccer/pretrain-derived/best_h.pt --split fresh [--gate]
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --eval runs/kpline-soccer/pretrain-derived/best_h.pt --split test [--gate]
 

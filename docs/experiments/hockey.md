@@ -381,7 +381,7 @@ at once; check `nvidia-smi` before running `rink_metric` or the auto-labellers.
 4. Reject wrong-geometry frames (nhl6, nhl9 class of failure) automatically: the plausibility gate (section 14d) refuses
    the homographies no camera gives; a wrong but camera-like H still goes through.
 
-## 14. Keypoint + line model for NHL ("model A") - `lab/hockey/train_kpline.py`
+## 14. Keypoint + line model for NHL ("model A") - `lab/common/train_kpline.py`
 
 **Question:** does a PnLCalib-style model - heatmaps for named keypoints and for the ends of the straight lines, then one
 DLT over points and lines - get closer to the ~8 px target than YOLO (section 2) and the segmentation DLT (section 6)?
@@ -405,9 +405,9 @@ DLT over points and lines - get closer to the ~8 px target than YOLO (section 2)
 
 **Commands:**
 
-    python -m sportcal.lab.hockey.train_kpline --phase pretrain
-    python -m sportcal.lab.hockey.train_kpline --phase finetune --init runs/kpline/pretrain/best_h.pt
-    python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune/best_h.pt --split test
+    python -m sportcal.lab.common.train_kpline --phase pretrain
+    python -m sportcal.lab.common.train_kpline --phase finetune --init runs/kpline/pretrain/best_h.pt
+    python -m sportcal.lab.common.train_kpline --eval runs/kpline/finetune/best_h.pt --split test
 
 **Result** (2026-09-23, batch 4 / workers 4 throughout, default CUDA path, no OOM at any point):
 
@@ -448,7 +448,7 @@ decide whether the coverage gap is a decoding threshold (the 0.3 peak cut in Set
 
 **Same-set comparison with YOLO and failure analysis** (2026-09-23): both methods on the same 63 `test` frames, same
 measure (`geom_error`, 1 m grid, points the label puts in frame), one frame at a time
-(`train_kpline --eval <weights> [--yolo]`). YOLO's H is canonicalized first (its labels mixed mirror conventions,
+(`train_kpline --eval <weights>`, YOLO through `lab/hockey/eval_yolo`). YOLO's H is canonicalized first (its labels mixed mirror conventions,
 section 0b). The YOLO figures differ from section 2 because the set, the measure and the inference path all differ
 (section 2 is valh-76, keypoint reprojection error, batched inference - ADR 0003).
 
@@ -517,9 +517,9 @@ to `runs/kpline/<phase>-derived`; `--eval` reads the set from the weights. Train
 the comparison isolates the keypoints; the end-view labels of 14b go into a later run.
 **Caveat:** the keypoint-count gate of section 14 (>= 7) was measured on 56 points; with 90 it has to be measured again.
 
-    python -m sportcal.lab.hockey.train_kpline --phase pretrain --keypoints derived
-    python -m sportcal.lab.hockey.train_kpline --phase finetune --keypoints derived --init runs/kpline/pretrain-derived/best_h.pt
-    python -m sportcal.lab.hockey.train_kpline --eval runs/kpline/finetune-derived/best_h.pt --split test
+    python -m sportcal.lab.common.train_kpline --phase pretrain --keypoints derived
+    python -m sportcal.lab.common.train_kpline --phase finetune --keypoints derived --init runs/kpline/pretrain-derived/best_h.pt
+    python -m sportcal.lab.common.train_kpline --eval runs/kpline/finetune-derived/best_h.pt --split test
 
 **Result** (2026-09-24, same index as model A, batch 4 / workers 4 throughout, no OOM):
 

@@ -33,7 +33,8 @@ from sportcal.sports.hockey import rink
 from sportcal.lab.hockey.diagnose_lines_fit import ACIERTO_PX, RANGO_PX, dibuja, slide  # noqa: E402
 from sportcal.lab.hockey.ice_lines_probe import normals  # noqa: E402
 from sportcal.lab.hockey.relabel_reproject import read_label  # noqa: E402
-from sportcal.lab.hockey.train_lines_seg import MEAN, NCLS, STD, UNetResNet34  # noqa: E402
+from sportcal.lab.hockey.train_lines_seg import NCLS  # noqa: E402
+from sportcal.models.unet import MEAN, STD, UNetResNet34  # noqa: E402
 
 PESOS = Path(os.environ.get("LINEAS_PESOS", ROOT / "runs" / "lineas_seg" / "best.pt"))
 

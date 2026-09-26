@@ -32,7 +32,20 @@ def test_core_is_sport_agnostic_and_depends_on_nothing_above_it():
 
 
 def test_sports_are_pure_geometry():
-    assert _violations("sports", ["sportcal.lab", "sportcal.product"]) == []
+    assert _violations("sports", ["sportcal.models", "sportcal.lab", "sportcal.product"]) == []
+
+
+def test_models_serve_lab_and_product_and_import_neither():
+    assert _violations("models", ["sportcal.lab", "sportcal.product"]) == []
+
+
+def test_common_lab_is_sport_agnostic():
+    """lab/common holds what every sport uses (the keypoint + line trainer): a sport's lab may import it, never the
+    reverse, so adding a sport never means editing it. The Streamlit apps (`*_app.py`) are the exception: they put the
+    sports' labelling tools behind one UI."""
+    labs = [d.name for d in (PKG / "lab").iterdir() if d.is_dir() and d.name not in ("common", "__pycache__")]
+    bad = [v for v in _violations("lab/common", ["sportcal.lab." + lab for lab in labs]) if "_app.py " not in v]
+    assert bad == []
 
 
 def test_product_never_imports_lab_at_module_level():

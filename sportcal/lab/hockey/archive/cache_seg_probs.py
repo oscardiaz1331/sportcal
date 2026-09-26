@@ -32,7 +32,7 @@ from sportcal.lab.hockey import make_line_masks as MM
 from sportcal.sports.hockey import rink
 from sportcal.lab.hockey.diagnose_lines_seg import PESOS, load_model  # noqa: E402
 from sportcal.lab.hockey.relabel_reproject import read_label  # noqa: E402
-from sportcal.lab.hockey.train_lines_seg import MEAN, STD  # noqa: E402
+from sportcal.models.unet import MEAN, STD  # noqa: E402
 
 JOBS = [
     ("hockeyrink", rink.RINK_IIHF),

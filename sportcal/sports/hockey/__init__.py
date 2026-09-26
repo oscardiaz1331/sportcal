@@ -10,6 +10,8 @@ def _rink_sport(name, params):
         line_classes=tuple(rink.CLASSES),
         polylines=lambda: rink.rink_polylines(params),
         keypoints=lambda: rink.build_template(params),
+        straight_lines=lambda: [(a, b) for _, a, b in rink.straight_lines(params)],
+        derived_keypoints=lambda: rink.derived_keypoints(params),
     ))
 
 

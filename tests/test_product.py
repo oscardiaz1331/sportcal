@@ -121,17 +121,16 @@ def test_kpline_estimator_answers_a_new_arena_and_refuses_an_impossible_camera()
     pytest.importorskip("torch")
     import cv2
 
-    from sportcal.core.geometry import geom_error
-    from sportcal.lab.hockey import train_kpline as K
+    from sportcal.lab.common.train_kpline import error, index_of
     from sportcal.paths import ROOT, RUNS
-    from sportcal.product.hockey import KplineEstimator
+    from sportcal.product.kpline import KplineEstimator
 
-    weights = RUNS / "kpline" / "finetune" / "best_h.pt"
-    if not (weights.exists() and K.HOCKEY_INDEX.exists()):
+    weights, index = RUNS / "kpline" / "finetune" / "best_h.pt", index_of("hockey-nhl")
+    if not (weights.exists() and index.exists()):
         pytest.skip("needs the kpline weights and the H index")
-    rows = {r["id"]: r for r in map(json.loads, open(K.HOCKEY_INDEX, encoding="utf-8"))}
+    rows = {r["id"]: r for r in map(json.loads, open(index, encoding="utf-8"))}
     good, bad = rows["hockeyrink_nhl_fresh/nhl14_004181"], rows["hockeyrink_nhl_fresh/nhl13_010575"]
     est = KplineEstimator(weights, device="cpu")
     e = est.estimate(cv2.imread(str(ROOT / good["image"])))
-    assert geom_error(e.H, np.asarray(good["H"]), K.GRID["hockey-nhl"], good["w"], good["h"]) < 10
+    assert error(e.H, good) < 10
     assert est.estimate(cv2.imread(str(ROOT / bad["image"]))) is None

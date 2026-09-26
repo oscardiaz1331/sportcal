@@ -130,4 +130,7 @@ SOCCER = register(Sport(
     line_classes=("background", *_NAMES),
     polylines=lambda: [(1 + _NAMES.index(n), pl) for n, pl in polylines().items()],
     keypoints=lambda: KEYPOINT_COORDS,
+    straight_lines=lambda: [(tuple(a), tuple(b)) for name, pl in polylines().items()
+                            if "circle" not in name and "arc" not in name for a, b in zip(pl[:-1], pl[1:])],
+    derived_keypoints=derived_keypoints, centred=True, y_down=False,
 ))

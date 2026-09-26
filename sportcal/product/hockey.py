@@ -10,8 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sportcal.core.camera import is_plausible_view
 from sportcal.core.geometry import REF_WIDTH, fit_homography_ransac
+from sportcal.product.kpline import KplineEstimator
 from sportcal.product.pipeline import Estimate, HomographyPipeline
 from sportcal.sports import get as get_sport
 from sportcal.sports.hockey import rink
@@ -78,34 +78,6 @@ class SegDltEstimator:
         if H is None or cost > self.max_cost:
             return None
         return Estimate(H, 1.0 - cost / self.max_cost, self.name)
-
-
-class KplineEstimator:
-    """Heatmaps of the template keypoints and of the ends of the straight lines -> points + lines DLT, refused when no
-    real camera gives that H (`core.camera.is_plausible_view`). The best measured method (ADR 0003)."""
-    name = "kpline"
-
-    def __init__(self, weights, sport="hockey-nhl", device="cuda"):
-        # ponytail: same debt as SegDltEstimator: HalfResUNet and estimate_H live in sportcal.lab.hockey.train_kpline,
-        # imported lazily. Upgrade: promote them to sportcal/models + core with the lab port (docs/porting-status.md).
-        import torch
-        from sportcal.lab.hockey import train_kpline as K
-
-        self._K, self._torch = K, torch
-        self.kp, self.sport, self.device = K.keypoints("base"), sport, torch.device(device)
-        self.model = K.HalfResUNet(ncls=K.n_channels(self.kp, sport), pretrained=False).to(self.device).eval()
-        self.model.load_state_dict(torch.load(weights, map_location=self.device))
-
-    def estimate(self, frame):
-        h, w = frame.shape[:2]
-        x, _ = self._K.to_input(frame)
-        torch, dev = self._torch, self.device
-        with torch.no_grad(), torch.autocast(dev.type, enabled=dev.type == "cuda"):
-            heat = torch.sigmoid(self.model(x[None].to(dev)).float()).cpu().numpy()[0]
-        H = self._K.estimate_H(heat, self.sport, w, self.kp)
-        if H is None or not is_plausible_view(H, w, h, self._K.BOX[self.sport]):
-            return None
-        return Estimate(H, 1.0, self.name)  # the gate is yes/no: no graded confidence to report
 
 
 def build_pipeline(yolo_weights, seg_weights=None, sport="hockey-nhl", hold_frames=0, kpline_weights=None,

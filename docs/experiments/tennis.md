@@ -25,8 +25,8 @@ frame - only an overlay check can (to do once the images are extracted). 1 of 88
 ends = 32 channels) at p50 0.5 px, max 1.2 px.
 
     python -m sportcal.lab.tennis.tennis_h                                 # -> datasets/tennis_h.jsonl
-    python -m sportcal.lab.hockey.train_kpline --sport tennis --phase pretrain --epochs 20
-    python -m sportcal.lab.hockey.train_kpline --sport tennis --eval runs/kpline-tennis/pretrain/best_h.pt --split test [--gate]
+    python -m sportcal.lab.common.train_kpline --sport tennis-itf --phase pretrain --epochs 20
+    python -m sportcal.lab.common.train_kpline --sport tennis-itf --eval runs/kpline-tennis/pretrain/best_h.pt --split test [--gate]
 
 The per-sport tennis model is the upper bound the template-conditioned model is compared against when tennis is left out
 of its training.

@@ -21,7 +21,7 @@ configs/     training configs
 
 ```bash
 uv pip install --python venv/Scripts/python.exe -e ".[dev]"      # add ,train / ,lab for models / streamlit apps
-venv/Scripts/python.exe -m pytest                                # 72 fast tests in ~8 s (pytest -m "" for all 75)
+venv/Scripts/python.exe -m pytest                                # fast tests, ~10 s (pytest -m "" for all)
 ```
 
 ```python
@@ -48,7 +48,7 @@ Whole video with detection, tracking, the rink lines drawn from the estimated H 
 
 ## Status
 
-Best model: keypoint + line heatmaps (model A2, `lab/hockey/train_kpline.py`) with a camera plausibility gate, 7.2 px
+Best model: keypoint + line heatmaps (model A2, `lab/common/train_kpline.py`) with a camera plausibility gate, 7.2 px
 median at 97% coverage on 4 NHL arenas nothing was tuned on - the first to reach the ~8 px a metric minimap needs. YOLO
 keypoints (102 px median) remain as an optional coverage fallback. Open: outdoor games and wrong homographies a real
 camera could produce. Details: `docs/decisions/0003-product-composition.md`, `docs/experiments/hockey.md` sections 14g-14h.

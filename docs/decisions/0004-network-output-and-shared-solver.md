@@ -66,7 +66,7 @@ accuracy against the per-sport ones; it cannot reach a new sport by itself (no d
 
 ## Consequences
 
-* The per-sport models keep the model-A recipe; the soccer model is its first reuse (`train_kpline --sport soccer`).
+* The per-sport models keep the model-A recipe; the soccer model is its first reuse (`train_kpline --sport soccer-fifa`).
 * New geometry lands in `core` (the solver, gates, conventions), never inside a network.
 * Every experiment reports on the same splits with the same solver; a result that changes the representation is
   written up in the sport's experiment file and summarised here.

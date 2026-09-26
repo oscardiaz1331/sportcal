@@ -18,10 +18,13 @@ sportcal/
   core/      sport-agnostic building blocks: geometry (DLT, refinement), pinhole camera,
              robust fitting, surface segmentation, frame-to-frame background motion, label I/O
   sports/    one subpackage per sport: template geometry + line classes (pure data)
-  lab/       per-sport experiments, runnable with `python -m sportcal.lab.<sport>.<name>`
+  models/    networks and their decoding, shared by lab (training) and product (inference): the U-Net,
+             the keypoint + line model (heatmaps -> H for any sport)
+  lab/       experiments, runnable with `python -m sportcal.lab.<sport>.<name>`
+    <sport>/           what only that sport has: its data sources and H index, labellers, its experiments
     <sport>/archive/   frozen dead ends and superseded tools (unmaintained)
-    common/            sport-agnostic labs and the Streamlit apps (`streamlit run sportcal/lab/common/<app>.py`)
-  product/   the deployed pipeline: Estimator chain + per-sport estimators
+    common/            what every sport uses (the keypoint + line trainer `train_kpline`) and the Streamlit apps
+  product/   the deployed pipeline: Estimator chain, the sport-agnostic estimators, per-sport compositions
 tests/       fast, deterministic, no GPU / weights / datasets
 docs/        architecture, decisions (ADRs), experiment write-ups, porting status
 configs/     training configs (yaml), per sport
@@ -36,10 +39,11 @@ knows where they are (override the root with `SPORTCAL_ROOT`).
 Arrows read "may import".
 
 ```
-product  ->  core, sports          (lab only via lazy import inside a constructor: temporary)
-lab      ->  core, sports
-sports   ->  core                  (in practice only numpy + sports.base: they are pure data)
-core     ->  (nothing above it)    never imports sports, lab or product
+product  ->  models, core, sports  (lab only via lazy import inside a constructor: temporary, seg-DLT)
+lab      ->  models, core, sports  (a sport's lab may import lab/common, never another sport's lab)
+models   ->  core, sports
+sports   ->  core                  (pure data plus the naming rule `canonicalize`)
+core     ->  (nothing above it)    never imports sports, models, lab or product
 ```
 
 `tests/test_layering.py` enforces these by reading the imports (no code is executed), so a
@@ -49,10 +53,14 @@ deliberately loose today: `product/hockey.py` lazily imports two lab modules
 
 ## Adding things
 
-**A sport** (e.g. soccer): create `sportcal/sports/<name>/`, build `Sport` instances
-(`sports/base.py`: size, surface, line classes, polylines, optional keypoints), `register()`
-them, import the subpackage from `sports/__init__.py`. Nothing in `core/` changes; if you
-find yourself editing `core/` for a sport, the abstraction is wrong - write it down in an ADR.
+**A sport** (e.g. tennis): create `sportcal/sports/<name>/`, build `Sport` instances
+(`sports/base.py`: size, surface, line classes, polylines, keypoints, straight lines, optional derived
+keypoints, where the origin is, the naming rule), `register()` them, import the subpackage from
+`sports/__init__.py`. To train the keypoint + line model on it, write `lab/<family>/` code that
+produces `datasets/<family>_h.jsonl` (one H per frame, split per video) and run
+`python -m sportcal.lab.common.train_kpline --sport <name>`. Nothing in `core/`, `models/` or
+`lab/common/` changes; if you find yourself editing them for a sport, the abstraction is wrong -
+write it down in an ADR.
 
 **An experiment**: add `sportcal/lab/<sport>/<name>.py` with a `main()` guarded by
 `if __name__ == "__main__"` (importing a lab module must never run it - an unguarded script
@@ -75,8 +83,8 @@ code on purpose once and check it goes red (the Hartley-normalisation test was a
 
 ```bash
 uv pip install --python venv/Scripts/python.exe -e ".[dev]"     # once (add [train] / [lab] as needed)
-venv/Scripts/python.exe -m pytest                              # 72 fast tests, ~8 s
-venv/Scripts/python.exe -m pytest -m ""                        # everything (75), ~45 s
+venv/Scripts/python.exe -m pytest                              # the fast tests, ~10 s
+venv/Scripts/python.exe -m pytest -m ""                        # everything, including slow ones needing weights
 venv/Scripts/python.exe -m sportcal.lab.hockey.seg_to_homography --selftest
 ```
 

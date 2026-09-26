@@ -43,4 +43,6 @@ TENNIS = register(Sport(
     line_classes=("background", *_NAMES),
     polylines=lambda: [(1 + _NAMES.index(n), pl) for n, pl in polylines().items()],
     keypoints=lambda: KEYPOINT_COORDS,
+    straight_lines=lambda: [(tuple(pl[0]), tuple(pl[1])) for pl in polylines().values()],
+    centred=True,
 ))

@@ -47,8 +47,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as Fn
 from torch.utils.data import DataLoader, Dataset
-from torchvision.models import ResNet34_Weights, resnet34
 
+from sportcal.models.unet import MEAN, STD, UNetResNet34
 from sportcal.paths import ROOT
 
 from sportcal.lab.hockey import make_line_masks as MM
@@ -68,8 +68,6 @@ SYNTH_JOBS = [("hockeyrink_synth_lines", "hockeyrink_synth")]
 FLIP_CLS = {0: 0, 1: 1, 2: 3, 3: 2, 4: 5, 5: 4, 6: 6, 7: 7,
             8: 10, 9: 11, 10: 8, 11: 9, IGNORE: IGNORE}
 
-MEAN = np.array([0.485, 0.456, 0.406], np.float32)
-STD = np.array([0.229, 0.224, 0.225], np.float32)
 
 
 # ------------------------------------------------------------------ datos
@@ -181,52 +179,6 @@ def ema_update(teacher, student, alpha):
 
 # ------------------------------------------------------------------ modelo
 
-class Bloque(nn.Module):
-    def __init__(self, c_in, c_out):
-        super().__init__()
-        self.f = nn.Sequential(
-            nn.Conv2d(c_in, c_out, 3, padding=1, bias=False), nn.BatchNorm2d(c_out), nn.ReLU(True),
-            nn.Conv2d(c_out, c_out, 3, padding=1, bias=False), nn.BatchNorm2d(c_out), nn.ReLU(True))
-
-    def forward(self, x):
-        return self.f(x)
-
-
-class UNetResNet34(nn.Module):
-    """U-Net con encoder ResNet34 de ImageNet. Preentrenado importa: con 918
-    imagenes de entrenamiento, partir de cero no llega."""
-
-    def __init__(self, ncls=NCLS, pretrained=True):
-        super().__init__()
-        r = resnet34(weights=ResNet34_Weights.IMAGENET1K_V1 if pretrained else None)   # False: weights come from a checkpoint
-        self.stem = nn.Sequential(r.conv1, r.bn1, r.relu)   # 64,  1/2
-        self.pool = r.maxpool
-        self.e1, self.e2, self.e3, self.e4 = r.layer1, r.layer2, r.layer3, r.layer4
-        self.d4 = Bloque(512 + 256, 256)
-        self.d3 = Bloque(256 + 128, 128)
-        self.d2 = Bloque(128 + 64, 64)
-        self.d1 = Bloque(64 + 64, 32)
-        self.final = nn.Sequential(Bloque(32, 16), nn.Conv2d(16, ncls, 1))
-
-    @staticmethod
-    def _up(x, skip):
-        x = Fn.interpolate(x, size=skip.shape[-2:], mode="bilinear", align_corners=False)
-        return torch.cat([x, skip], 1)
-
-    def forward(self, x):
-        s0 = self.stem(x)            # 1/2
-        s1 = self.e1(self.pool(s0))  # 1/4
-        s2 = self.e2(s1)             # 1/8
-        s3 = self.e3(s2)             # 1/16
-        s4 = self.e4(s3)             # 1/32
-        d = self.d4(self._up(s4, s3))
-        d = self.d3(self._up(d, s2))
-        d = self.d2(self._up(d, s1))
-        d = self.d1(self._up(d, s0))
-        d = Fn.interpolate(d, size=x.shape[-2:], mode="bilinear", align_corners=False)
-        return self.final(d)
-
-
 # ------------------------------------------------------------------ loss
 
 def pesos_por_clase(loader, max_batches=40):
@@ -336,7 +288,7 @@ def main():
     pesos = pesos_por_clase(dl_tr).to(device)
     print("  " + "  ".join("{}={:.1f}".format(MM.CLASSES[c][:9], pesos[c]) for c in range(NCLS)))
 
-    model = UNetResNet34().to(device)
+    model = UNetResNet34(NCLS).to(device)
     init_path = Path(args.init) if args.init else None
     if init_path and init_path.exists():
         ckpt = torch.load(init_path, map_location=device)

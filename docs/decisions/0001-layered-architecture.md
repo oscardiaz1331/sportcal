@@ -37,8 +37,13 @@ surface segmentation. Adding a sport meant copying hockey code; nothing said whi
 
 * `product/hockey.py::SegDltEstimator` lazily imports `lab/hockey/diagnose_lines_seg.py` and
   `seg_to_homography.py`, because the segmentation network and `solve_from_probs` still live in the
-  lab. Same for `KplineEstimator` and `lab/hockey/train_kpline.py` (`HalfResUNet`,
-  `estimate_H`). Upgrade path: promote them to `sportcal/models/` and `core/` when the lab port lands.
+  lab. Upgrade path: promote them to `sportcal/models/` and `core/` when the lab port lands.
+* (Resolved 2026-09-26) The keypoint + line model lived in `lab/hockey/train_kpline.py` while training every sport, with
+  the soccer and tennis templates hard-coded in it, and the product imported it lazily. Now: the network in
+  `models/unet.py`, its decoding in `models/kpline.py`, the trainer in `lab/common/train_kpline.py` with no sport in it
+  (the sport's template gives `box`, `straight_lines`, `derived_keypoints`, `canonicalize`), `KplineEstimator` in
+  `product/kpline.py`. `models/` may import `core/` and `sports/`, never `lab/` or `product/`; `lab/common` never imports
+  a sport's lab (apps excepted) - both enforced in `tests/test_layering.py`.
 * (Resolved 2026-09-21) `testing/` was ported: soccer template -> `sports/soccer`, camera math -> `core/camera`, solver ->
   `lab/soccer`, apps -> `lab/common`, and the four temporary compat shims were deleted. Lab code of different sports must not
   import each other (enforced by `tests/test_layering.py`); what both need goes to `core/` or `lab/common/`.
