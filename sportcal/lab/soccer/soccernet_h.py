@@ -192,6 +192,9 @@ def main():
     ap.add_argument("--max-circle-px", type=float, default=10.0, help="the same for the circle points, when there are any")
     ap.add_argument("--lines-only", action="store_true", help="skip `fit_circle` (the index of section 19)")
     args = ap.parse_args()
+    if not all((Path(args.root) / d).is_dir() for d in ("train", "valid", "test")):
+        # a wrong --root would otherwise rewrite the index with the hand labels only
+        raise SystemExit("{} has no train/ valid/ test/ folders: nothing written".format(Path(args.root).resolve()))
     rows, dropped = [], Counter()
     for split_dir, split in (("train", "train"), ("valid", "dev"), ("test", "test")):
         for js in sorted((Path(args.root) / split_dir).glob("*.json")):
