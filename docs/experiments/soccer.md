@@ -651,3 +651,24 @@ centre-circle frames into the index. Their SoccerNet annotations have the circle
 to them by minimising the distance of the annotated circle points to the projected circle plus the line residuals,
 started from this model's own answer at a low threshold and kept only when the annotations agree.
 
+## 21. What the SoccerNet frames left out of the index are annotated with - `lab/soccer/unused_gt.py` (2026-09-26)
+
+12647 frames of calibration-2023 are not in the index. Straight markings with at least 2 annotated points, and whether
+a circle is annotated (the centre circle wins over a penalty arc when both are):
+
+| straight lines | centre circle | penalty arc | no circle |
+|---|---|---|---|
+| 0 | 0 | 0 | 19 |
+| 1 | 59 | 1 | 1 |
+| 2 | 1142 | 364 | 21 |
+| 3 | 550 | 799 | 1652 |
+| 4+ (left out by the residual gates) | 1538 | 5560 | 941 |
+
+No frame has the centre circle alone: the centre-circle frames the index misses have 1-3 lines besides it (1751), and
+3220 of the 3289 frames with an annotated centre circle have 5+ points on it. Those are the views the model lacks
+(section 20). A fit that uses the circle points (their distance to the projected circle) next to the lines can recover
+them; 8039 frames with 4+ lines were left out by the residual gates instead (lens distortion, section 16), a separate
+question.
+
+    python -m sportcal.lab.soccer.unused_gt --root datasets/calibration-2023
+
