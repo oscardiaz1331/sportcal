@@ -60,8 +60,8 @@ FINETUNE_SPLITS = ("train", "test_leaky")
 def keypoints(kp_set):
     """{template name: (K, 2) world keypoints} of one keypoint set. Passed around explicitly rather than set as a module
     global: DataLoader workers on Windows re-import this module and would see the default."""
-    # ponytail: one soccer set (the 31 named points of sports/soccer/field.py) whatever kp_set says
-    return {**{k: KEYPOINT_SETS[kp_set](p) for k, p in PARAMS.items()}, "soccer-fifa": FIFA.KEYPOINT_COORDS}
+    soccer = FIFA.KEYPOINT_COORDS if kp_set == "base" else np.vstack([FIFA.KEYPOINT_COORDS, FIFA.derived_keypoints()])
+    return {**{k: KEYPOINT_SETS[kp_set](p) for k, p in PARAMS.items()}, "soccer-fifa": soccer}
 
 
 def n_channels(kp, template="hockey-nhl"):

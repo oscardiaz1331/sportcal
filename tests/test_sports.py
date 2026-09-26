@@ -89,3 +89,18 @@ def test_derived_keypoints_lie_on_painted_curves_and_survive_the_rink_mirrors():
         M = D @ S.T + np.array([L if S[0, 0] < 0 else 0, W if S[1, 1] < 0 else 0])
         assert np.abs(M[:, None] - D[None]).sum(-1).min(1).max() < 1e-9
     assert len(D) == 34 and np.abs(D[:, None] - rink.build_template(p)[None]).sum(-1).min() > 0.5   # no duplicate
+
+
+def test_soccer_derived_keypoints_lie_on_the_circles_and_survive_the_field_mirrors():
+    """Each derived point is on the centre circle or a penalty arc, the set maps onto itself under the X and Y mirrors
+    (so a mirrored frame renames them), and none repeats a base keypoint."""
+    from sportcal.sports.soccer import field as F
+    D = F.derived_keypoints()
+    pl = F.polylines()
+    curves = np.vstack([pl["center_circle"], pl["penalty_arc_left"], pl["penalty_arc_right"]])
+    centres = np.array(F.CIRCLE_CENTERS)
+    assert np.abs(np.linalg.norm(D[:, None] - centres[None], axis=2).min(1) - F.CIRCLE_RADIUS).max() < 1e-9
+    assert np.linalg.norm(D[:, None] - curves[None], axis=2).min(1).max() < 0.5    # on the painted part of each arc
+    for S in (np.diag([-1.0, 1.0]), np.diag([1.0, -1.0])):
+        assert np.abs((D @ S)[:, None] - D[None]).sum(-1).min(1).max() < 1e-9
+    assert np.abs(D[:, None] - F.KEYPOINT_COORDS[None]).sum(-1).min() > 0.5

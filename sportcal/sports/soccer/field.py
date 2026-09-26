@@ -111,6 +111,15 @@ def _keypoints():
     return k
 
 
+def derived_keypoints():
+    """Points on the circles that no two lines cross: the ends of the centre circle's diameter along X, its four points
+    at 45 degrees, and the apex of each penalty arc. A centre-circle view otherwise has every keypoint on the halfway
+    line, which leaves the homography undetermined. Closed under the field's mirrors in X and in Y."""
+    r, c = CIRCLE_RADIUS, CIRCLE_RADIUS / np.sqrt(2)
+    return np.array([(-r, 0.0), (r, 0.0), (-c, -c), (c, -c), (-c, c), (c, c),
+                     (-(PENALTY_SPOT_X - r), 0.0), (PENALTY_SPOT_X - r, 0.0)], float)
+
+
 KEYPOINTS = _keypoints()  # [(name, (X, Y)), ...] - the points a human clicks when labelling
 KEYPOINT_NAMES = {i: name for i, (name, _) in enumerate(KEYPOINTS)}
 KEYPOINT_COORDS = np.array([xy for _, xy in KEYPOINTS], float)

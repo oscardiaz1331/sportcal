@@ -615,3 +615,18 @@ The run was started into `pretrain/` and its first dev evaluation overwrote E0's
 * Pretrain wall time and per-epoch curve were not captured (run interactively, no log file); only the final
   checkpoint's eval numbers above are known.
 
+## 20. E1: keypoints on the circles - `train_kpline --sport soccer --keypoints derived` (2026-09-26)
+
+**Why:** section 19 - the 5 `fresh` frames the model refuses are centre-circle views whose keypoints all lie on the
+halfway line. **Change:** `sports/soccer/field.derived_keypoints`: 8 points on the circles no two lines cross (the ends
+of the centre circle's diameter along X, its four points at 45 degrees, the apex of each penalty arc), closed under the
+field's mirrors (`tests/test_sports.py`). 39 keypoints + 34 line ends = 73 channels (65 before). Same index, recipe and
+epochs as E0; runs go to `runs/kpline-soccer/pretrain-derived`.
+**Check before training:** targets rendered from the 18 `fresh` labels and decoded back through `estimate_H`: with the
+base set 4 of 18 give no H even from perfect heatmaps (f1500, f1550, f1700 - centre-circle views - and soccer2 f3000);
+with the derived set all 18 do, p50 1.5 px, max 3.0 px.
+
+    python -m sportcal.lab.hockey.train_kpline --sport soccer --phase pretrain --keypoints derived --epochs 20
+    python -m sportcal.lab.hockey.train_kpline --sport soccer --eval runs/kpline-soccer/pretrain-derived/best_h.pt --split fresh [--gate]
+    python -m sportcal.lab.hockey.train_kpline --sport soccer --eval runs/kpline-soccer/pretrain-derived/best_h.pt --split test [--gate]
+
