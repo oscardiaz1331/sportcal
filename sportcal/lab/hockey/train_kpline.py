@@ -20,6 +20,7 @@ dev labels are the stored ones (~11-16 px off), so differences of a few px betwe
 import argparse
 import json
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -212,7 +213,10 @@ def train(args, rows, device):
     template, _, runs = SPORTS[args.sport]
     dev = [r for r in rows if r["split"] == "dev" and r["template"] == template]
     kp = keypoints(args.keypoints)
-    out = RUNS / runs / (args.phase + ("" if args.keypoints == "base" else "-" + args.keypoints))
+    out = RUNS / runs / (args.phase + ("" if args.keypoints == "base" else "-" + args.keypoints) + args.tag)
+    if args.init and Path(args.init).resolve().parent == out.resolve():
+        # the first dev evaluation always writes best_h.pt: it would overwrite the run being continued
+        raise SystemExit("--init is inside {}: continue into another folder with --tag".format(out))
     out.mkdir(parents=True, exist_ok=True)
     print("{}: {} train frames, {} dev frames, {} channels -> {}".format(args.phase, len(tr), len(dev),
                                                                          n_channels(kp, template), out))
@@ -273,6 +277,7 @@ def main():
     ap.add_argument("--yolo", action="store_true", help="with --eval: the weights are a YOLO pose model (product path)")
     ap.add_argument("--keypoints", choices=tuple(KEYPOINT_SETS), default="base",
                     help="keypoint set to train (runs go to <phase>-derived); --eval reads it from the weights")
+    ap.add_argument("--tag", default="", help="suffix of the run folder, e.g. -cont to continue a run without overwriting it")
     ap.add_argument("--gate", action="store_true", help="with --eval: refuse the H no real camera gives (section 14d)")
     args = ap.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

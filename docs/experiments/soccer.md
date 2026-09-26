@@ -592,6 +592,21 @@ consistent with its SoccerNet `test` numbers.
 model lacks. The gate refuses the one gross answer and nothing good, the same shape as hockey (sections 14d, 14h of the
 hockey write-up).
 
+**Continued pretrain** (2026-09-26, owner's run: the E0 weights as `--init`, a fresh cosine schedule, stopped by hand
+after a night; per-epoch dev numbers not captured). Scored on CPU against E0 on the same frames: `fresh` and a fixed
+random 200 of `test` (seed 0):
+
+| weights | fresh cov | fresh p50 | fresh < 10 px | test200 cov | test200 p50 | test200 < 10 px |
+|---|---|---|---|---|---|---|
+| E0 (`pretrain/best_h.pt`) | 72% | 10.5 | 33% | 93% | 6.7 | 68% |
+| continued, best on dev (`pretrain-cont/best_h.pt`) | 72% | 8.6 | 39% | 92% | 7.0 | 64% |
+| continued, last (`pretrain-cont/last.pt`) | 72% | 8.9 | 50% | 94% | 6.6 | 67% |
+
+No gate; within noise on `test`, 1-3 frames on `fresh`. The 5 centre-circle views are still refused by every
+checkpoint: more training does not give the DLT support off the halfway line, which confirms E1. E0 stays the reference.
+The run was started into `pretrain/` and its first dev evaluation overwrote E0's `best_h.pt` (restored from a copy);
+`train_kpline` now refuses an `--init` inside the output folder, and `--tag` names another one.
+
 **Caveats:**
 
 * `fresh` is 18 frames from two clips (13 `soccer`, 5 `soccer2`): a couple of misses move coverage and p50 by double
