@@ -10,6 +10,7 @@ IIHF, the stored NHL ones are 11-22 px off), then fine-tune on the hand labels o
     python -m sportcal.lab.hockey.train_kpline --eval runs/hockeyrink/yolo26m-18/weights/best_homography.pt --yolo
     python -m sportcal.lab.hockey.train_kpline --phase pretrain --keypoints derived     # + circle points, section 14c
     python -m sportcal.lab.hockey.train_kpline --sport soccer --phase pretrain          # FIFA pitch, soccer.md section 19
+    python -m sportcal.lab.hockey.train_kpline --sport tennis --phase pretrain          # ITF court, tennis.md
 
 Targets are rendered from H every time, never stored: a flip or a camera turn (`core.camera.ptz_warp`) changes H,
 `canonicalize` renames the points, and no remapping table exists to go wrong. Checkpoints are chosen by the median
@@ -36,18 +37,22 @@ from sportcal.lab.hockey.train_lines_seg import MEAN, STD, UNetResNet34
 from sportcal.paths import DATASETS, ROOT, RUNS
 from sportcal.sports.hockey import rink
 from sportcal.sports.soccer import field as FIFA
+from sportcal.sports.tennis import court as ITF
 
 SIZE = (960, 544)                            # network input: a 16:9 frame at 960 px, padded at the bottom to /32
 OUT_SIZE = (SIZE[0] // 2, SIZE[1] // 2)      # heatmaps at half the input (HalfResUNet)
 SIGMA = 1.5                                  # heatmap Gaussian, px at 480 (6 px at 1920)
 # per template: world extent (x0, x1, y0, y1) and the straight painted lines as world segments (circles are not lines)
 BOX = {**{k: (0.0, p["length"], 0.0, p["width"]) for k, p in PARAMS.items()},
-       "soccer-fifa": (-FIFA.HALF_LENGTH, FIFA.HALF_LENGTH, -FIFA.HALF_WIDTH, FIFA.HALF_WIDTH)}
+       "soccer-fifa": (-FIFA.HALF_LENGTH, FIFA.HALF_LENGTH, -FIFA.HALF_WIDTH, FIFA.HALF_WIDTH),
+       "tennis-itf": (-ITF.HALF_LENGTH, ITF.HALF_LENGTH, -ITF.HALF_WIDTH, ITF.HALF_WIDTH)}
 SEGMENTS = {**{k: [(a, b) for _, a, b in rink.straight_lines(p)] for k, p in PARAMS.items()},
             "soccer-fifa": [(tuple(a), tuple(b)) for name, pl in FIFA.polylines().items() if "circle" not in name
-                            and "arc" not in name for a, b in zip(pl[:-1], pl[1:])]}
+                            and "arc" not in name for a, b in zip(pl[:-1], pl[1:])],
+            "tennis-itf": [(tuple(pl[0]), tuple(pl[1])) for pl in ITF.polylines().values()]}
 # sport -> (the template its model is trained and scored on, its per-frame H index, its runs folder)
-SPORTS = {"hockey": ("hockey-nhl", HOCKEY_INDEX, "kpline"), "soccer": ("soccer-fifa", DATASETS / "soccer_h.jsonl", "kpline-soccer")}
+SPORTS = {"hockey": ("hockey-nhl", HOCKEY_INDEX, "kpline"), "soccer": ("soccer-fifa", DATASETS / "soccer_h.jsonl", "kpline-soccer"),
+          "tennis": ("tennis-itf", DATASETS / "tennis_h.jsonl", "kpline-tennis")}
 # the 56 keypoints of the rink template, or those plus the points derived from the circles and board corners
 KEYPOINT_SETS = {"base": rink.build_template,
                  "derived": lambda p: np.vstack([rink.build_template(p), rink.derived_keypoints(p)])}
@@ -61,7 +66,8 @@ def keypoints(kp_set):
     """{template name: (K, 2) world keypoints} of one keypoint set. Passed around explicitly rather than set as a module
     global: DataLoader workers on Windows re-import this module and would see the default."""
     soccer = FIFA.KEYPOINT_COORDS if kp_set == "base" else np.vstack([FIFA.KEYPOINT_COORDS, FIFA.derived_keypoints()])
-    return {**{k: KEYPOINT_SETS[kp_set](p) for k, p in PARAMS.items()}, "soccer-fifa": soccer}
+    return {**{k: KEYPOINT_SETS[kp_set](p) for k, p in PARAMS.items()}, "soccer-fifa": soccer,
+            "tennis-itf": ITF.KEYPOINT_COORDS}
 
 
 def n_channels(kp, template="hockey-nhl"):
