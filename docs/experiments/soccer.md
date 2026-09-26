@@ -672,3 +672,28 @@ question.
 
     python -m sportcal.lab.soccer.unused_gt --root datasets/calibration-2023
 
+## 22. Fitting the centre-circle frames with their circle - `soccernet_h.fit_circle` (2026-09-26)
+
+**Why:** section 21 - the frames the index misses have 1-3 lines and an annotated circle. **Method:** for a frame
+`fit` refuses, H is fitted to the line points (distance to the projected line) and the circle points (distance to the
+nearest point of the projected circle) together, least squares with a soft L1 loss in image coordinates / w. Start: the
+ellipse through the best-annotated circle read as an affine image of the world circle, at 8 rotations x 2 mirrorings,
+each refined briefly, the best refined to the end (~0.5 s per frame). Refused when every line passes through the
+circle's centre (a circle and its diameters leave H one degree of freedom). Same gates as the index (line residual
+<= 3 px, circle <= 10 px at 1920, plausible camera). `tests/test_soccer.py`: a synthetic centre-circle view with the
+halfway line and the far touchline gives back its camera (up to the halfway-line mirror, which the naming rule settles),
+and the halfway line alone is refused; both mutation-checked.
+**Check against the index** (100 indexed frames with the centre circle and 4+ lines, their lines cut to the halfway
+line + 1 or 2 others, compared with the index H over the visible pitch, px at 1920): with 2 lines 77 pass the gates,
+p50 13.0 / p90 30.9 px (one at 908 px: a wrong solution that fits the annotations); with 3 lines 75 pass, p50 12.0 /
+p90 25.2. The index H itself is not the truth here: with ALL lines plus the circle, the fit still differs from the
+lines-only index H by p50 8.8 px, because the annotations do not agree with one homography (the index H misses the
+circle points by 4.3 px, the circle fit by 1.1; lens distortion, section 16). So the circle-fitted labels are a few px
+looser than the index's, in the same range as the stored hockey labels that pretraining already used (11-22 px).
+**Yield** (600 random left-out frames, SoccerNet image size): 363 have 4+ lines (left out by the residual gates, not
+this fit's business); of the 237 others, 101 are kept (70 centre circle, 31 penalty arc), 35 fail the gates, 101 have
+no usable circle. About 2100 frames for the whole set, ~1450 of them centre-circle views.
+
+    python -m sportcal.lab.soccer.soccernet_h --root datasets/calibration-2023          # rebuilds datasets/soccer_h.jsonl
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --phase pretrain --keypoints derived --epochs 20 --tag -circlefit
+

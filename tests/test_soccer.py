@@ -148,3 +148,29 @@ def test_a_soccernet_style_annotation_gives_back_the_camera():
     assert 0.3 < SN.fit(noisy, w, h)[1] < 2
     r = SN.fit(swapped, w, h)
     assert r is None or r[1] > 5                   # refused, or it no longer fits its own points
+
+
+def test_a_centre_circle_view_with_two_lines_gives_back_the_camera():
+    """A view with the centre circle, the halfway line and the far touchline only (too few lines for `fit`): the fit that
+    also uses the circle points recovers the camera; with the halfway line alone it refuses (a circle and its diameter
+    leave H one degree of freedom)."""
+    from sportcal.lab.soccer import soccernet_h as SN
+    w, h = 960, 540
+    H = pose_to_H(np.array([[0.0, -60.0, 18.0, 0.0, np.radians(15), 3 * w]]), w, h)[0]
+    H /= H[2, 2]
+
+    def pts(world):
+        q = np.c_[world, np.ones(len(world))] @ H.T
+        q = q[:, :2] / q[:, 2:]
+        return [{"x": x / w, "y": y / h} for x, y in q if 0 < x < w and 0 < y < h]
+    ann = {"Middle line": pts(np.linspace((0, -34), (0, 34), 12)), "Side line top": pts(np.linspace((-52.5, 34), (52.5, 34), 30)),
+           "Circle central": pts(F._arc(0, 0, F.CIRCLE_RADIUS, 0.3, 5.9, 14))}
+    assert len(ann["Side line top"]) >= 2 and SN.fit(ann, w, h) is None
+    H2, resid, n, resid_c = SN.fit_circle(ann, w, h)
+    # these markings are symmetric about the halfway line: either twin fits them, the naming rule picks one
+    H, H2 = (SN.canonical_mirror(M, (0.0, 0.0), y_down=False)[0] for M in (H, H2))
+    grid = np.array([[x, y, 1.0] for x in np.linspace(-30, 30, 7) for y in np.linspace(-20, 34, 7)])
+    p1, p2 = grid @ H.T, grid @ H2.T
+    assert np.abs(p1[:, :2] / p1[:, 2:] - p2[:, :2] / p2[:, 2:]).max() < 0.5 and n == 2 and resid < 0.1 and resid_c < 0.1
+    ann.pop("Side line top")
+    assert SN.fit_circle(ann, w, h, min_lines=1) is None

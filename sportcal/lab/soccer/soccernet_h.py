@@ -5,6 +5,8 @@ keypoint + line model can be rendered from H and the template. Results: docs/exp
 Each annotation gives, per marking class, points on that marking in normalised image coordinates. Straight markings
 become image lines (least squares through their points) matched to the template's world lines; with the points where
 two of them meet on the pitch, one DLT (`core.geometry.solve_points_lines`) gives H; the circle points only check it.
+Frames with fewer than 4 straight markings (most centre-circle views) are fitted to their lines AND circle points
+together (`fit_circle`, soccer.md section 22) and pass the same gates.
 A frame is kept when its straight-line points lie within --max-px of the lines its H draws, its circle points within
 --max-circle-px of the circles (looser: arcs are clicked less precisely and a wide lens bends them), and a real camera
 can give the H (`core.camera.is_plausible_view`). Thresholds read off a 1500-frame sample: soccer.md section 19.
@@ -23,6 +25,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from scipy.optimize import least_squares
 
 from sportcal.core.camera import canonical_mirror, is_plausible_view
 from sportcal.core.geometry import line_through, solve_points_lines
@@ -85,6 +88,12 @@ def fit(ann, w, h, min_lines=4):
     if H is None:
         return None
     H = H / H[2, 2]
+    return (H, *_check(H, used, ann, w, h, len(wl)))
+
+
+def _check(H, used, ann, w, h, n):
+    """(median px distance of the straight-line points to their segments as H draws them, n, the same for the circle
+    points - nan without them)."""
     d, dc = [], []
     for name, p in used:
         seg = np.linspace(LINES[name][0], LINES[name][1], 200)
@@ -96,7 +105,84 @@ def fit(ann, w, h, min_lines=4):
             t = np.linspace(0, 2 * np.pi, 360)
             q = np.c_[c[0] + F.CIRCLE_RADIUS * np.cos(t), c[1] + F.CIRCLE_RADIUS * np.sin(t), np.ones(360)] @ H.T
             dc.append(_dist_to_segment_polyline(p, q[:, :2] / q[:, 2:]))
-    return H, float(np.median(np.concatenate(d))), len(wl), float(np.median(np.concatenate(dc))) if dc else float("nan")
+    return float(np.median(np.concatenate(d))), n, float(np.median(np.concatenate(dc))) if dc else float("nan")
+
+
+def _lines(ann, w, h):
+    """[(name, (n, 2) px)] of the straight markings with at least 2 points that span 5 px."""
+    out = []
+    for name in LINES:
+        p = np.array([[q["x"] * w, q["y"] * h] for q in ann.get(name, [])], float)
+        if len(p) >= 2 and np.ptp(p, 0).max() >= 5:
+            out.append((name, p))
+    return out
+
+
+def fit_circle(ann, w, h, min_lines=2, n_start=8):
+    """For frames with too few straight markings for `fit` (a centre-circle view has 1-3): H fitted to the straight-line
+    points and the circle points together - each circle point's distance to the projected circle, each line point's to
+    its projected line - in the format of `fit`, or None. Start: the ellipse through the best-annotated circle
+    (`cv2.fitEllipse`) read as an affine image of the world circle, at `n_start` rotations x 2 mirrorings; each start is
+    refined briefly, and the lowest cost is refined to the end (least squares, soft L1). Refused when every line passes through the circle's
+    centre: a circle and its diameters leave H one degree of freedom, whatever the fit returns."""
+    used = _lines(ann, w, h)
+    circ = [(CIRCLES[k], np.array([[q["x"] * w, q["y"] * h] for q in ann[k]], float)) for k in CIRCLES
+            if len(ann.get(k, [])) >= 3]
+    if len(used) < min_lines or not circ:
+        return None
+    (C0, P0) = max(circ, key=lambda c: len(c[1]))
+    if len(P0) < 5:
+        return None
+    R = F.CIRCLE_RADIUS
+    wl = [line_through(*LINES[n]) for n, _ in used]
+    if all(abs(l @ (*C0, 1.0)) / np.hypot(*l[:2]) < 0.5 for l in wl):
+        return None
+    N = np.diag([1.0 / w, 1.0 / w, 1.0])            # optimise in image coordinates / w (conditioning)
+    Pn = [(np.c_[p, np.ones(len(p))] @ N.T)[:, :2] for _, p in used]
+    Cn = [(c, (np.c_[p, np.ones(len(p))] @ N.T)[:, :2]) for c, p in circ]
+
+    def residuals(h8):
+        Hn = np.append(h8, 1.0).reshape(3, 3)
+        Hi = np.linalg.inv(Hn)
+        r = []
+        for l, p in zip(wl, Pn):
+            li = Hi.T @ l
+            r.append((p @ li[:2] + li[2]) / np.hypot(li[0], li[1]))
+        for (cx, cy), p in Cn:
+            q = np.c_[p, np.ones(len(p))] @ Hi.T
+            q = q[:, :2] / q[:, 2:] - (cx, cy)
+            q = (cx, cy) + R * q / np.linalg.norm(q, axis=1, keepdims=True)    # nearest point of the world circle
+            b = np.c_[q, np.ones(len(q))] @ Hn.T
+            r.append((b[:, :2] / b[:, 2:] - p).ravel())
+        return np.concatenate(r)
+
+    (cx, cy), (ax, bx), ang = cv2.fitEllipse(P0.astype(np.float32))
+    t = np.radians(ang)
+    E = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]]) @ np.diag([ax / 2, bx / 2])
+    best = None
+    for k in range(n_start):
+        phi = 2 * np.pi * k / n_start
+        Rot = np.array([[np.cos(phi), -np.sin(phi)], [np.sin(phi), np.cos(phi)]])
+        for S in (np.eye(2), np.diag([1.0, -1.0])):
+            A = E @ Rot @ S / R
+            H0 = np.eye(3)
+            H0[:2, :2], H0[:2, 2] = A, np.array([cx, cy]) - A @ np.asarray(C0)
+            H0 = N @ H0
+            try:     # a short plain least-squares run per start, the robust refinement only for the best one
+                sol = least_squares(residuals, (H0 / H0[2, 2]).ravel()[:8], max_nfev=30)
+            except (np.linalg.LinAlgError, ValueError):
+                continue
+            if np.isfinite(sol.cost) and (best is None or sol.cost < best.cost):
+                best = sol
+    if best is None:
+        return None
+    try:
+        best = least_squares(residuals, best.x, loss="soft_l1", f_scale=2.0 / w)
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+    H = np.linalg.inv(N) @ np.append(best.x, 1.0).reshape(3, 3)
+    H = H / H[2, 2]
+    return (H, *_check(H, used, ann, w, h, len(used)))
 
 
 def main():
@@ -104,6 +190,7 @@ def main():
     ap.add_argument("--root", required=True, help="folder with train/ valid/ test/ (images + one json per image)")
     ap.add_argument("--max-px", type=float, default=3.0, help="median straight-line residual at 1920 px to keep a frame")
     ap.add_argument("--max-circle-px", type=float, default=10.0, help="the same for the circle points, when there are any")
+    ap.add_argument("--lines-only", action="store_true", help="skip `fit_circle` (the index of section 19)")
     args = ap.parse_args()
     rows, dropped = [], Counter()
     for split_dir, split in (("train", "train"), ("valid", "dev"), ("test", "test")):
@@ -114,9 +201,12 @@ def main():
                 dropped["no image"] += 1
                 continue
             h, w = im.shape[:2]
-            r = fit(json.load(open(js, encoding="utf-8")), w, h)
+            ann = json.load(open(js, encoding="utf-8"))
+            r, method = fit(ann, w, h), "lines"
+            if r is None and not args.lines_only:
+                r, method = fit_circle(ann, w, h), "lines+circle"
             if r is None:
-                dropped["fewer than 4 straight markings"] += 1
+                dropped["fewer than 4 straight markings" + ("" if args.lines_only else ", no usable circle")] += 1
                 continue
             H, resid, n, resid_c = r
             if resid * 1920.0 / w > args.max_px:
@@ -131,7 +221,7 @@ def main():
             H, flips = canonical_mirror(H, (0.0, 0.0), y_down=False)
             rows.append({"id": "soccernet/{}/{}".format(split_dir, js.stem), "image": str(img), "template": "soccer-fifa",
                          "source": "soccernet", "split": split, "w": w, "h": h, "H": H.tolist(), "flips": flips,
-                         "fit": {"lines": n, "resid_px": round(resid * 1920.0 / w, 2),
+                         "fit": {"method": method, "lines": n, "resid_px": round(resid * 1920.0 / w, 2),
                                  "circle_resid_px": round(resid_c * 1920.0 / w, 2) if resid_c == resid_c else None}})
     # our own hand labels (labeler.py) of broadcasts SoccerNet never saw: the "fresh" split, never trained on
     hand = DATASETS / "soccer_labels"
@@ -150,6 +240,7 @@ def main():
     print("{} frames -> {}".format(len(rows), OUT))
     for s, n in sorted(Counter(r["split"] for r in rows).items()):
         print("  {:<6} {}".format(s, n))
+    print("  fitted with the circle: {}".format(sum(bool(r["fit"]) and r["fit"]["method"] == "lines+circle" for r in rows)))
     for why, n in dropped.most_common():
         print("  left out {:>6}  {}".format(n, why))
     fitted = [r["fit"]["resid_px"] for r in rows if r["fit"]]
