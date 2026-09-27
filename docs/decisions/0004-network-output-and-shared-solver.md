@@ -55,7 +55,7 @@ sport).
 |---|---|---|---|
 | E0 | Keypoint + line-end heatmaps per sport (hockey A2, soccer from SoccerNet) | the baseline | done / running |
 | E1 | E0 plus circles and arcs as their own outputs (ellipse points or parameters; an ellipse fixes 5 of the 8 dof) | whether PnLCalib's extra elements pay per sport: ~22% of SoccerNet frames have < 4 straight markings; faceoff circles are the most visible hockey marking in many views | medium |
-| E2 | Template-conditioned keypoints: each template point enters as a query (normalised world position + type) and gets one heatmap. Train on NHL, test on IIHF with the IIHF template; then hockey + soccer | whether conditioning on the template generalises across field dimensions | medium |
+| E2 | Template-conditioned keypoints: each template point enters as a query (normalised world position + type) and gets one heatmap. Train on NHL, test on IIHF with the IIHF template; then hockey + soccer. Designed in ADR 0005 | whether conditioning on the template generalises across field dimensions | medium |
 | E3 | Class-agnostic primitives (segments, arcs, intersections) + a solver that matches them to any template | whether the zero-data path works, and at what precision | high |
 | E4 | E2 and E3 on a sport kept out of training (e.g. basketball, which has public calibration data) | the end goal: a new sport with zero or few labels | high |
 | - | H or K R t regressed directly | already answered (hockey.md 8); only as a row of the portfolio comparison table, on soccer's larger set | low, optional |
