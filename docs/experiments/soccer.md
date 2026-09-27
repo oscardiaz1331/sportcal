@@ -667,7 +667,7 @@ a circle is annotated (the centre circle wins over a penalty arc when both are):
 No frame has the centre circle alone: the centre-circle frames the index misses have 1-3 lines besides it (1751), and
 3220 of the 3289 frames with an annotated centre circle have 5+ points on it. Those are the views the model lacks
 (section 20). A fit that uses the circle points (their distance to the projected circle) next to the lines can recover
-them; 8039 frames with 4+ lines were left out by the residual gates instead (lens distortion, section 16), a separate
+them; 8039 frames with 4+ lines were left out by the residual gates instead (mostly the DLT, not the lens: section 23), a separate
 question.
 
     python -m sportcal.lab.soccer.unused_gt --root datasets/calibration-2023
@@ -695,5 +695,67 @@ this fit's business); of the 237 others, 101 are kept (70 centre circle, 31 pena
 no usable circle. About 2100 frames for the whole set, ~1450 of them centre-circle views.
 
     python -m sportcal.lab.soccer.soccernet_h --root datasets/calibration-2023          # rebuilds datasets/soccer_h.jsonl
-    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --phase pretrain --keypoints derived --epochs 20 --tag -circlefit
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --phase pretrain --keypoints derived --epochs 20 --tag=-circlefit
 
+
+## 23. The 4+-line frames the index left out: refit H on the points - `soccernet_h.refine` (2026-09-27)
+
+**Why:** section 21 - 8039 frames with 4+ straight markings miss the index gates (line residual <= 3 px, circle <= 10 px,
+plausible camera), taken to be lens distortion. Up to ~80% more training frames if they can be used.
+**Probe** (300 random of the 5677 left-out train frames with 4+ lines, seed 0; residuals at 1920): the index DLT fails
+them as line > 3 px (173), circle > 10 px (116), implausible (5), no fit (6). Refitting H by least squares on the line
+points themselves (distance to the projected world line, soft L1, started at the DLT; circles kept out of the fit) makes
+**40% pass every gate**; adding a radial k1 to the same fit (p_u = p_d (1 + k1 |p_d|^2), p in units of w/2) makes 51%.
+The circle residual, which neither fit sees, drops from p50 24.9 (DLT) to 9.2 (refit) and 7.5 (refit + k1). k1 itself
+is p10 -0.047 / p50 -0.020 / p90 +0.023 - it changes sign from frame to frame, so it mostly absorbs annotation noise
+rather than measuring a lens. **The main cause is the DLT** (it fits lines through the points and their crossings, not
+the points), not distortion.
+**Decision:** `refine` without k1, applied only to frames whose DLT misses the gates (the rows already in the index do not
+change). A frame that passes only with k1 would be stored with a pinhole H that misses its own points by more than the
+gate; k1 waits until the targets can be rendered with it (`ponytail:` in `refine`).
+**Result** (full build to `datasets/soccer_h_refine.jsonl`): 15519 frames against 12164; **+3355 `lines-ls` rows (train
++2401, dev +507, test +447), train 8831 -> 11232 (+27%)**; the 12164 existing rows are identical (checked row by row).
+Added rows: line residual p50 1.8 / p90 2.6 px; circle residual (not fitted) p50 4.5 px on the 3103 that have a circle.
+Still left out: 3393 line > 3 px, 2085 < 4 lines and no usable circle, 1609 circle > 10 px, 229 implausible.
+**Overlay check** (the pitch drawn from the stored H, the annotated points on top; 48 random `lines-ls` rows, the 12 that
+`refine` moved most from the DLT, 12 moved 10-25 px): all sit on the painted markings except **train/03876**, whose
+annotation names a right-side goal-area line in a left-goal view (the DLT and the refit both fit it within ~3.4 px,
+the DLT just missed the gate). `refine` moves H from the DLT by p50 16.5 px over the frame (p99 ~4000); the largest moves
+are frames where the DLT was wrong and the refit lies on the lines.
+**Dead end, a per-line gate:** each line's median distance, worst line per frame. It does not separate good from bad:
+the trusted DLT rows already have worst-line p50 6.6 / p90 23 / p99 677 px (800 random rows) and look right - one stray
+annotation that the frame median tolerates - while 03876's worst line is at 1187 px and 02651 (good) at 6542. Not used.
+**Caveats:** dev and test grow too, so numbers on the new index are not comparable with E0 / E1 on the old one. The E1 run
+on the old index died before its first checkpoint (section 24), so the index was swapped directly; the old one is kept as
+`datasets/soccer_h_before_refine.jsonl` (its rows are the new index minus the `lines-ls` ones). The misnamed-annotation
+rate (1 in 72 looked at) was not measured on the old rows.
+
+    python -m sportcal.lab.soccer.soccernet_h --root datasets/calibration-2023 --out datasets/soccer_h_refine.jsonl
+    mv datasets/soccer_h_refine.jsonl datasets/soccer_h.jsonl       # done 2026-09-27, old index backed up first
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --phase pretrain --keypoints derived --epochs 20 --tag=-refine
+
+## 24. The circle-fit E1 run died: corrupted batches, cause not found - `train_kpline.corrupted` (2026-09-27)
+
+**What:** `runs/kpline-soccer-fifa/pretrain-derivedcirclefit` (the section 22 index) stopped at its first dev evaluation,
+after epoch 4, with `LinAlgError: SVD did not converge` in the DLT; epoch 0's mean loss was already inf. Its `last.pt` has
+all 92 BatchNorm running means and variances NaN, from the stem on, while every weight is finite (max |w| 4.5). One
+corrupted input in a training forward pass poisons every running statistic; in eval mode the heatmaps are then NaN and
+the solver stops.
+**Found:** some samples out of `Frames.__getitem__` carry garbage - an input up to 2.85e21 (a normalised frame stays
+within +-2.64), targets down to -1.328e17, the same value in different rows and in two separate processes. Seen during
+that training (11:49-12:57) and between 13:30 and 13:50 in three probes: a train-mode forward of the checkpoint (inf
+loss at batch 1174), an augmented pass over the circle-fit rows (10 of 1369 samples, in one cluster), the four rows of
+that batch (5 of 160). Never without augmentation, and old `lines` rows were hit too: the circle-fit rows are not the
+cause.
+**Not reproduced after 13:52**, in about 75k samples: 3 epochs with 8 workers and logged augmentation seeds (26.5k), 4
+passes next to a GPU run (5.5k), 24 fixed seeded samples recomputed in 14 processes for 15 min under GPU load (21.3k, no
+difference from the reference), replays of the rows that had failed (660). A 7.5 GB x 20-pass user-space RAM test found
+no error, and no source file had changed since 2026-09-26. What the failing windows had in common: heavy load, with
+another session's 8-worker data sweep running in the second one. Windows logged one corrected machine check (CPU cache)
+on 2026-09-15.
+**Decision:** `train_kpline.corrupted` refuses any batch outside the physical ranges before the forward pass (training:
+skipped and logged, the count on each epoch line; evaluation: scored as misses). The cause is open; if skipped batches
+keep appearing, test the hardware (MemTest86 overnight, XMP profile off) before trusting long runs.
+**Relaunched** on the section 23 index: `runs/kpline-soccer-fifa/pretrain-derived-refine` (log next to the folder).
+`--tag` takes its value with `=` (`--tag=-refine`): argparse reads `--tag -refine` as a missing value, and the section 22
+run was started as `--tag circlefit`, hence its folder name.

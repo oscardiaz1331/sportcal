@@ -148,6 +148,11 @@ def test_a_soccernet_style_annotation_gives_back_the_camera():
     assert 0.3 < SN.fit(noisy, w, h)[1] < 2
     r = SN.fit(swapped, w, h)
     assert r is None or r[1] > 5                   # refused, or it no longer fits its own points
+    # `refine` brings a wrong start (1 m and 1 degree off) back onto the points
+    t = np.radians(1.0)
+    H3, resid3, _, _ = SN.refine(ann, w, h, H @ np.array([[np.cos(t), -np.sin(t), 1.0], [np.sin(t), np.cos(t), 0.5], [0, 0, 1]]))
+    p3 = grid @ H3.T
+    assert np.abs(p1[:, :2] / p1[:, 2:] - p3[:, :2] / p3[:, 2:]).max() < 0.5 and resid3 < 0.1
 
 
 def test_a_centre_circle_view_with_two_lines_gives_back_the_camera():

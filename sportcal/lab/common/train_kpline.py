@@ -103,6 +103,14 @@ def focal_loss(logits, target):
     return -loss / pos.sum().clamp(min=1)
 
 
+def corrupted(x, tgt):
+    """True for a batch no frame and no rendered target can give: an input outside the normalised image range, a target
+    outside [0, 1], a NaN or an inf (NaN fails every comparison). Such batches appeared at random in a soccer run and one
+    of them poisoned every BatchNorm statistic (soccer.md section 24).
+    ponytail: skipped, not explained - the cause was not found; if the skipped count climbs, test the hardware."""
+    return not bool(x.abs().amax() <= 3 and tgt.amin() >= 0 and tgt.amax() <= 1)
+
+
 def error(H, r, gate=False):
     """Px at 1920 between H and the row's label, inf for no H (or, with `gate`, one no real camera gives)."""
     sport = sports.get(r["template"])
@@ -116,7 +124,10 @@ def evaluate(model, rows, device, kp, batch=4, gate=False):
     """`error` for every row."""
     model.eval()
     errs = [np.inf] * len(rows)
-    for x, _, idx in DataLoader(Frames(rows, augment=False, kp=kp), batch_size=batch, num_workers=2):
+    for x, tgt, idx in DataLoader(Frames(rows, augment=False, kp=kp), batch_size=batch, num_workers=2):
+        if corrupted(x, tgt):                     # scored as misses: NaN heatmaps would stop the solver
+            print("corrupted batch, scored as misses:", [rows[i]["id"] for i in idx.tolist()], flush=True)
+            continue
         with torch.autocast(device.type, enabled=device.type == "cuda"):
             heat = torch.sigmoid(model(x.to(device)).float()).cpu().numpy()
         for hm, i in zip(heat, idx.tolist()):
@@ -169,22 +180,34 @@ def train(args, rows, device):
     loader = DataLoader(Frames(tr, augment=True, kp=kp), batch_size=args.batch, shuffle=True, num_workers=args.workers,
                         drop_last=True, persistent_workers=args.workers > 0)
     best, saved = np.inf, False
+    steps, t_start = min(len(loader), args.max_steps or len(loader)), time.time()
     for ep in range(epochs):
         model.train()
-        t0, tot, n = time.time(), 0.0, 0
-        for x, tgt, _ in loader:
+        t0, tot, n, skipped = time.time(), 0.0, 0, 0
+        for x, tgt, idx in loader:
+            x, tgt = x.to(device), tgt.to(device)
+            if corrupted(x, tgt):                 # before the forward pass, which updates the BatchNorm statistics
+                skipped += 1
+                print("skipped a corrupted batch:", [tr[i]["id"] for i in idx.tolist()], flush=True)
+                continue
             with torch.autocast(device.type, enabled=device.type == "cuda"):
-                logits = model(x.to(device))
-            loss = focal_loss(logits, tgt.to(device))
+                logits = model(x)
+            loss = focal_loss(logits, tgt)
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()
             tot, n = tot + loss.item(), n + 1
+            if n % max(1, steps // 20) == 0:      # progress every 5% of an epoch; the ETA includes the dev evaluations
+                done = (ep + n / steps) / epochs
+                eta = (time.time() - t_start) * (1 - done) / done
+                print("  epoch {}/{}  {:3.0f}%  | total {:3.0f}%  | eta {:.0f}h{:02.0f}m  | loss {:.4f}".format(
+                    ep + 1, epochs, 100 * n / steps, 100 * done, eta // 3600, eta % 3600 // 60, tot / n), flush=True)
             if args.max_steps and n >= args.max_steps:
                 break
         sched.step()
         line = "epoch {:3d}  loss {:.4f}  {:.0f}s".format(ep, tot / max(n, 1), time.time() - t0)
+        line += "  skipped {} corrupted batches".format(skipped) if skipped else ""
         torch.save(model.state_dict(), out / "last.pt")
         if (ep + 1) % args.eval_every == 0 or ep == epochs - 1:
             errs = evaluate(model, dev, device, kp)
@@ -212,7 +235,7 @@ def main():
     ap.add_argument("--split", default="test", help="with --eval: test | test_leaky | dev | fresh")
     ap.add_argument("--keypoints", choices=KEYPOINT_SETS, default="base",
                     help="keypoint set to train (runs go to <phase>-derived); --eval reads it from the weights")
-    ap.add_argument("--tag", default="", help="suffix of the run folder, e.g. -cont to continue a run without overwriting it")
+    ap.add_argument("--tag", default="", help="suffix of the run folder, e.g. --tag=-cont (with =) to continue a run without overwriting it")
     ap.add_argument("--gate", action="store_true", help="with --eval: refuse the H no real camera gives (hockey.md 14d)")
     args = ap.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

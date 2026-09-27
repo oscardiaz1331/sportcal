@@ -54,7 +54,7 @@ the minimum code that works.
 | Need | Look at |
 |---|---|
 | Layers, dependency rules, adding a sport / experiment / product method | `docs/architecture.md` |
-| Why things are the way they are | `docs/decisions/` (ADRs; 0003 product composition, 0004 network output + shared solver) |
+| Why things are the way they are | `docs/decisions/` (ADRs; 0003 product composition, 0004 network output + shared solver, 0005 template-conditioned model) |
 | What was measured, and the dead ends | `docs/experiments/hockey.md` (Spanish long-form `hockey.es.md`), `soccer.md`, `tennis.md` |
 | Code | `sportcal/{core,sports,models,lab,product}`; tests in `tests/` |
 | Porting ledger (old -> new paths) | `docs/porting-status.md` |
@@ -75,7 +75,8 @@ the minimum code that works.
 * **GPU is 8 GB**: nothing else on it while a training runs (`nvidia-smi`). On Windows the DataLoader workers
   re-import the training module at every dev evaluation: do not move or edit `lab/common/train_kpline.py` or what it
   imports while a training runs - use a worktree.
-* A continued training goes to a new folder (`--tag -cont`): the first dev evaluation always writes `best_h.pt`.
+* A continued training goes to a new folder (`--tag=-cont`, with `=`: argparse reads `-cont` as an option): the first
+  dev evaluation always writes `best_h.pt`.
 * opencv: keep **`opencv-contrib-python`** only (plain `opencv-python` removes `cv2.ximgproc`).
 
 ## Facts that are easy to get wrong

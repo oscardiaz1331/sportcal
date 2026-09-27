@@ -6,7 +6,8 @@ Each annotation gives, per marking class, points on that marking in normalised i
 become image lines (least squares through their points) matched to the template's world lines; with the points where
 two of them meet on the pitch, one DLT (`core.geometry.solve_points_lines`) gives H; the circle points only check it.
 Frames with fewer than 4 straight markings (most centre-circle views) are fitted to their lines AND circle points
-together (`fit_circle`, soccer.md section 22) and pass the same gates.
+together (`fit_circle`, soccer.md section 22) and pass the same gates; frames whose DLT misses the gates get their H
+refined on the line points themselves (`refine`, section 23).
 A frame is kept when its straight-line points lie within --max-px of the lines its H draws, its circle points within
 --max-circle-px of the circles (looser: arcs are clicked less precisely and a wide lens bends them), and a real camera
 can give the H (`core.camera.is_plausible_view`). Thresholds read off a 1500-frame sample: soccer.md section 19.
@@ -108,6 +109,40 @@ def _check(H, used, ann, w, h, n):
     return float(np.median(np.concatenate(d))), n, float(np.median(np.concatenate(dc))) if dc else float("nan")
 
 
+def _line_residuals(Hi, wl, Pn):
+    """Signed distances of each line's points `Pn` to its world line `wl` drawn by the inverse homography `Hi`."""
+    out = []
+    for l, p in zip(wl, Pn):
+        li = Hi.T @ l
+        out.append((p @ li[:2] + li[2]) / np.hypot(li[0], li[1]))
+    return out
+
+
+def refine(ann, w, h, H):
+    """H refined by least squares (soft L1) on the straight-line points themselves - each point's distance to its
+    projected world line - in the format of `fit`, or None. For frames whose `fit` misses the gates: the DLT fits lines
+    through the points and their crossings, not the points (soccer.md section 23). The circles stay out of the fit, so
+    their gate still checks it.
+    ponytail: no lens distortion - a k1 fitted with H recovers a few more frames, but the pinhole H stored for them
+    would miss their points by more than the gate; store k1 once the targets can be rendered with it."""
+    used = _lines(ann, w, h)
+    if len(used) < 4:
+        return None
+    wl = [line_through(*LINES[n]) for n, _ in used]
+    N = np.diag([1.0 / w, 1.0 / w, 1.0])             # optimise in image coordinates / w (conditioning)
+    Pn = [(np.c_[p, np.ones(len(p))] @ N.T)[:, :2] for _, p in used]
+    H0 = N @ H
+    try:
+        sol = least_squares(lambda h8: np.concatenate(_line_residuals(
+            np.linalg.inv(np.append(h8, 1.0).reshape(3, 3)), wl, Pn)), (H0 / H0[2, 2]).ravel()[:8],
+            loss="soft_l1", f_scale=2.0 / w)
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+    H = np.linalg.inv(N) @ np.append(sol.x, 1.0).reshape(3, 3)
+    H = H / H[2, 2]
+    return (H, *_check(H, used, ann, w, h, len(used)))
+
+
 def _lines(ann, w, h):
     """[(name, (n, 2) px)] of the straight markings with at least 2 points that span 5 px."""
     out = []
@@ -144,10 +179,7 @@ def fit_circle(ann, w, h, min_lines=2, n_start=8):
     def residuals(h8):
         Hn = np.append(h8, 1.0).reshape(3, 3)
         Hi = np.linalg.inv(Hn)
-        r = []
-        for l, p in zip(wl, Pn):
-            li = Hi.T @ l
-            r.append((p @ li[:2] + li[2]) / np.hypot(li[0], li[1]))
+        r = _line_residuals(Hi, wl, Pn)
         for (cx, cy), p in Cn:
             q = np.c_[p, np.ones(len(p))] @ Hi.T
             q = q[:, :2] / q[:, 2:] - (cx, cy)
@@ -185,12 +217,25 @@ def fit_circle(ann, w, h, min_lines=2, n_start=8):
     return (H, *_check(H, used, ann, w, h, len(used)))
 
 
+def refused(r, w, h, max_px, max_circle_px):
+    """Why a `fit` result is left out of the index, or None to keep it."""
+    H, resid, _, resid_c = r
+    if resid * 1920.0 / w > max_px:
+        return "line residual > {} px".format(max_px)
+    if resid_c * 1920.0 / w > max_circle_px:
+        return "circle residual > {} px".format(max_circle_px)
+    if not is_plausible_view(H, w, h, BOX):
+        return "no camera gives this H"
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", required=True, help="folder with train/ valid/ test/ (images + one json per image)")
     ap.add_argument("--max-px", type=float, default=3.0, help="median straight-line residual at 1920 px to keep a frame")
     ap.add_argument("--max-circle-px", type=float, default=10.0, help="the same for the circle points, when there are any")
-    ap.add_argument("--lines-only", action="store_true", help="skip `fit_circle` (the index of section 19)")
+    ap.add_argument("--lines-only", action="store_true", help="skip `fit_circle` and `refine` (the index of section 19)")
+    ap.add_argument("--out", default=str(OUT), help="index to write (another file while a training reads this one)")
     args = ap.parse_args()
     if not all((Path(args.root) / d).is_dir() for d in ("train", "valid", "test")):
         # a wrong --root would otherwise rewrite the index with the hand labels only
@@ -205,22 +250,22 @@ def main():
                 continue
             h, w = im.shape[:2]
             ann = json.load(open(js, encoding="utf-8"))
+            gates = (w, h, args.max_px, args.max_circle_px)
             r, method = fit(ann, w, h), "lines"
+            if r is not None and refused(r, *gates) and not args.lines_only:
+                r2 = refine(ann, w, h, r[0])
+                if r2 is not None and not refused(r2, *gates):
+                    r, method = r2, "lines-ls"
             if r is None and not args.lines_only:
                 r, method = fit_circle(ann, w, h), "lines+circle"
             if r is None:
                 dropped["fewer than 4 straight markings" + ("" if args.lines_only else ", no usable circle")] += 1
                 continue
+            why = refused(r, *gates)
+            if why:
+                dropped[why] += 1
+                continue
             H, resid, n, resid_c = r
-            if resid * 1920.0 / w > args.max_px:
-                dropped["line residual > {} px".format(args.max_px)] += 1
-                continue
-            if resid_c * 1920.0 / w > args.max_circle_px:
-                dropped["circle residual > {} px".format(args.max_circle_px)] += 1
-                continue
-            if not is_plausible_view(H, w, h, BOX):
-                dropped["no camera gives this H"] += 1
-                continue
             H, flips = canonical_mirror(H, (0.0, 0.0), y_down=False)
             rows.append({"id": "soccernet/{}/{}".format(split_dir, js.stem), "image": str(img), "template": "soccer-fifa",
                          "source": "soccernet", "split": split, "w": w, "h": h, "H": H.tolist(), "flips": flips,
@@ -238,12 +283,13 @@ def main():
             H, flips = canonical_mirror(np.asarray(d["H"], float), (0.0, 0.0), y_down=False)
             rows.append({"id": "soccer_labels/" + d["id"], "image": str(img), "template": "soccer-fifa", "source": "hand",
                          "split": "fresh", "w": w, "h": h, "H": H.tolist(), "flips": flips, "fit": None})
-    with open(OUT, "w", encoding="utf-8") as f:
+    with open(args.out, "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r) + "\n" for r in rows)
-    print("{} frames -> {}".format(len(rows), OUT))
+    print("{} frames -> {}".format(len(rows), args.out))
     for s, n in sorted(Counter(r["split"] for r in rows).items()):
         print("  {:<6} {}".format(s, n))
-    print("  fitted with the circle: {}".format(sum(bool(r["fit"]) and r["fit"]["method"] == "lines+circle" for r in rows)))
+    for m in ("lines+circle", "lines-ls"):
+        print("  fitted {}: {}".format(m, sum(bool(r["fit"]) and r["fit"]["method"] == m for r in rows)))
     for why, n in dropped.most_common():
         print("  left out {:>6}  {}".format(n, why))
     fitted = [r["fit"]["resid_px"] for r in rows if r["fit"]]
