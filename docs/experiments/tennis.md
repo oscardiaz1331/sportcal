@@ -20,7 +20,13 @@ camera sits behind the +X baseline). The published train/val split shares 434 of
 stable hash of the video id (80 / 10 / 10 train / dev / test).
 **What the fit says about the labels:** every frame fits one homography to within 1.6 px (max over the 14 points, at
 1920; median 0.55). That is how a detector that fits a court model would label, so the residual cannot reveal a wrong
-frame - only an overlay check can (to do once the images are extracted). 1 of 8841 frames gives an H no camera can give.
+frame - only an overlay check can. 1 of 8841 frames gives an H no camera can give.
+**Overlay check** (2026-09-27): the court drawn from the index H on one random frame of each of 47 random videos: every
+one sits on the painted lines at contact-sheet resolution (480 px wide), on clay, grass and hard courts of every colour.
+The views are homogeneous: nearly all are the main camera behind a baseline with the whole court in frame (one zoomed
+serve view in 47), so the line ends mostly coincide with the keypoints and tennis is an easy target for a per-sport
+model; for the generalization test that is the point - the court geometry is new, the kind of view is not.
+**Index built:** 8840 frames (train 6612, dev 1214, test 1014), all images present and complete.
 **Recipe check:** targets rendered from 300 labels decode back through `train_kpline.estimate_H` (14 points + 18 line
 ends = 32 channels) at p50 0.5 px, max 1.2 px.
 
