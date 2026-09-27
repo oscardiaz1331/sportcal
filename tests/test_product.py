@@ -114,6 +114,22 @@ def test_project_to_field_flags_points_outside_the_rink():
     assert inside.tolist() == [True, False]
 
 
+def test_project_to_field_uses_the_box_of_a_centred_field():
+    """Soccer's origin is the centre spot: a player in the left half has x < 0 and is still on the pitch."""
+    sport = get("soccer-fifa")
+    world_in, world_out = np.array([[-40.0, 10.0]]), np.array([[-60.0, 10.0]])
+    img = np.vstack([np.c_[world_in, [1]] @ H.T, np.c_[world_out, [1]] @ H.T])[:, :2]
+    world, inside = project_to_field(E("a"), img, sport)
+    assert np.allclose(world, np.vstack([world_in, world_out]), atol=1e-6)
+    assert inside.tolist() == [True, False]
+
+
+def test_project_to_field_with_no_points_returns_empty_arrays():
+    """A close-up with no player in it: nothing to project, and no crash."""
+    world, inside = project_to_field(E("a"), np.zeros((0, 2)), get("hockey-nhl"))
+    assert world.shape == (0, 2) and inside.shape == (0,)
+
+
 @pytest.mark.slow
 def test_kpline_estimator_answers_a_new_arena_and_refuses_an_impossible_camera():
     """Real weights on two frames of arenas nothing was tuned on (split `fresh`): one answered close to the hand label,

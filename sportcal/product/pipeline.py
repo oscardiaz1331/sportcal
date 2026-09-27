@@ -101,9 +101,15 @@ class HomographyPipeline:
 
 def project_to_field(estimate, img_xy, sport, margin=1.0):
     """Image pixels (e.g. players' feet) -> field metres, plus a mask of points that land
-    inside the field (with `margin` metres of slack). Only feet/ground contact points are
+    inside the field (`sport.box`, with `margin` metres of slack). Only feet/ground contact points are
     meaningful: H is a plane-to-plane map."""
+    img_xy = np.asarray(img_xy, float).reshape(-1, 2)
+    # ponytail: cv2.perspectiveTransform returns None for no points; this guard belongs in core.geometry.image_to_world,
+    # which a running training imports (CLAUDE.md) - move it there when core can be edited
+    if not len(img_xy):
+        return np.zeros((0, 2)), np.zeros(0, bool)
     world = image_to_world(estimate.H, img_xy)
-    inside = ((world[:, 0] >= -margin) & (world[:, 0] <= sport.length + margin)
-              & (world[:, 1] >= -margin) & (world[:, 1] <= sport.width + margin))
+    x0, x1, y0, y1 = sport.box
+    inside = ((world[:, 0] >= x0 - margin) & (world[:, 0] <= x1 + margin)
+              & (world[:, 1] >= y0 - margin) & (world[:, 1] <= y1 + margin))
     return world, inside
