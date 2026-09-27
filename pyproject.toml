@@ -17,6 +17,8 @@ train = ["torch", "torchvision", "ultralytics", "supervision"]
 # interactive labs / labelling apps
 lab = ["streamlit", "streamlit-image-coordinates", "matplotlib"]
 dev = ["pytest"]
+# the product: local web app + video worker (ADR 0006); the models come from `train`
+product = ["starlette", "uvicorn", "python-multipart", "av", "trackers", "scenedetect", "psutil", "huggingface_hub"]
 
 [tool.setuptools.packages.find]
 include = ["sportcal*"]
