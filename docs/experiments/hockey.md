@@ -790,3 +790,64 @@ filter needs consecutive frames).
 jitter reference is the same KLT motion the filter uses, so a wrong motion would not show in it; the error at the
 labelled frame is the check for that. The detection boxes jitter too (the feet point is the bottom of the box); that is
 not addressed here.
+
+## 15. Player tracking in metres, step 0: do the stock trackers swap players? - `lab/hockey/track_swaps.py` (design 2026-09-27)
+
+**Product plan this starts.** The product takes a broadcast and analyses the game at three levels of identity, built
+in this order: (1) per player, anonymous, within a shot: trajectories, speeds, distances in metres - this section;
+(2) the same player across cuts, replays and line changes; (3) a name: jersey number read on the frames where it is
+legible, voted per tracklet, and looked up in the game roster. Identity is a property of a tracklet, not of a
+detection. Level 1 already exists in `product/hockey_demo.py` (ByteTrack in the image, reset at every cut, team by
+jersey colour, feet projected to the rink), unmeasured.
+**Question:** how often do stock trackers swap two players' identities within a shot? If rarely, keep them and move to
+level 2; if often, build a tracker that associates in metres with team and physics gates (image IoU + distance on the
+rink as cost; teams and reachable distance as hard gates, no weights) and measure it the same way.
+**No ground truth.** No hockey tracks with IDs exist here, so this step uses indirect signals and checks them by eye
+(option C of the design discussion). Ground truth comes later from SoccerNet Game State Reconstruction (tracks, pitch
+positions, teams, jersey numbers; `trackers.eval` computes HOTA / IDF1). A signal that is also part of a tracker's
+cost cannot judge that tracker (a team gate makes team changes zero by construction): the signals below judge the
+stock trackers, and a new tracker is judged by what its gates cost (fragmentation).
+
+**Method.**
+* **Cache**, one GPU pass per video (`runs/tracking/<video>.npz`), every frame: shot cuts (`ContentDetector`, as the
+  demo); H and its method from `product.hockey.build_pipeline` (A2, `hold_frames=15`, `smooth=0.1`; lab -> product
+  lazy import, as `eval_yolo.py`); person boxes from COCO `yolo26m.pt` (class 0, conf >= 0.1 so ByteTrack's
+  low-confidence stage has input); a jersey histogram per box (the demo's function, moved to `core/`); the IDs given by
+  the `trackers` library's `ByteTrackTracker` and `BoTSORTTracker` (library defaults, BoT-SORT with its camera motion
+  compensation), both reset at every cut. Everything below runs offline on the cache.
+* **Positions:** feet (bottom centre of the box) through H, kept only on frames with H and inside the rink. Teams: 2-means
+  on the clip's histograms (as the demo); a box's team is confident when its distance ratio to the two centroids is
+  < 0.8, and referees (low saturation, no histogram) carry no team.
+* **Four signals per track** (times in seconds, so 30 and 60 fps videos compare):
+  * *jump*: displacement between two consecutive observations > `v_max * dt + margin`;
+  * *impossible turn*: mean velocity over the 0.5 s before t and over the 0.5 s after t (each window >= 80% observed)
+    differ by more than `a_max * 0.5 s`;
+  * *team change*: the track's 1 s rolling majority of confident team votes holds one team for >= 1 s, then the other
+    for >= 1 s;
+  * *fragmentation* (not a swap): track IDs per shot over the shot's median number of players in the rink, and median
+    track length.
+  Flags on the same track within 1 s merge into one event. A frame where more than half of the tracks (and >= 3) jump
+  is an **H jump**, counted apart and not as swaps; its rate is how often the minimap jumps.
+* **Constants, fixed before any number:** `v_max = 12 m/s` (NHL EDGE record top speed 24.94 mph = 11.15 m/s, rounded
+  up); `a_max = 15 m/s^2` (peak forward acceleration at the first push-off 9.6 +- 2.0 m/s^2 for high-calibre males,
+  doi:10.1080/14763141.2018.1503323; set above mean + 2 SD because no figure was found for the deceleration of a hockey
+  stop or the lateral acceleration of a tight turn). `margin` is the feet-point noise, measured on the development
+  videos (2 x the 99th percentile of the distance between a track's position and its median over 0.1 s) and frozen
+  before the final videos.
+* **Checking the signals:** on the development videos, 20 random events per event signal (jump, turn, team change), labelled by eye on a contact sheet
+  (real swap / H jump / false alarm; the owner or Claude, as in section 14e), give each signal's precision; margins may be
+  adjusted there. On the final videos nothing is adjusted: 20 random merged events per tracker are labelled, and
+  *real swaps per minute* = merged events per minute with H x their precision.
+* **Videos:** development nhl4 (30 fps), nhl7, nhl10; final nhl11-nhl14 (the `fresh` games; nothing is tuned on them,
+  labelling events there is measuring). nhl9 (outdoor, H unreliable) is left out.
+
+**Decision rule (set before running):** if the better of ByteTrack and BoT-SORT has < 1 real swap per minute of play
+with H on the final videos, keep it and move to level 2; otherwise build the metric-space tracker and measure it with
+the same signals and fragmentation.
+**Result:** not run yet.
+**Caveats:** the signals measure precision, not recall, so the swap rate is a lower bound and a "keep" decision holds
+only until ground truth (SoccerNet GSR, or hand-corrected hockey tracks) measures what they miss. Two teammates swapping
+while close together without a jump or a turn are invisible to all four signals. With `margin` in the tens of cm, a
+jump between players closer than that is missed. Frames without H are excluded, so a swap during a refusal or a hold
+shows only if it leaves a jump. The COCO detector also sees the bench, officials and crowd; the rink filter removes
+most, referees remain as players without a team.
