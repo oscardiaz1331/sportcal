@@ -26,6 +26,7 @@ from scenedetect.common import FrameTimecode
 from scenedetect.detectors import ContentDetector
 from scenedetect.scene_manager import compute_downscale_factor
 
+from sportcal.core.teams import fit_teams, jersey_histogram, team_of
 from sportcal.paths import RUNS
 from sportcal.product.hockey import build_pipeline
 from sportcal.sports.hockey import rink
@@ -76,51 +77,6 @@ TEAM_CALIB_SAMPLES = 300
 # distancia (m) dentro de la cual se considera que un jugador "tiene" el puck,
 # para colorear su recorrido segun el equipo que lo controla
 PUCK_POSSESSION_MAX_DIST_M = 3.0
-
-
-# por debajo de esto un pixel se considera "sin color" (hielo, valla blanca,
-# reflejos, patines) y no debe contar para el color de camiseta del equipo
-JERSEY_SAT_THRESHOLD = 40
-# si menos de esta fraccion del recorte tiene color de verdad, el recorte no
-# es de fiar (jugador agachado/tapado: la banda 25%-65% cayo sobre todo en
-# fondo, no en la camiseta) y se descarta en vez de ensuciar la calibracion
-JERSEY_MIN_COLOR_FRACTION = 0.15
-
-
-def player_jersey_histogram(frame, bbox):
-    """Histograma HSV (H,S) de la camiseta de un jugador, para diferenciar equipos.
-
-    Se recorta solo la banda vertical 25%-65% de la caja (torso), evitando el
-    casco/cabeza arriba y los patines/hielo abajo. Eso no basta cuando el
-    jugador esta agachado o tapado: se verifico a mano (ver conversacion) que
-    en esos casos la banda cae sobre hielo/valla/patin en vez de la camiseta,
-    con saturacion muy baja (~18) frente a un recorte limpio (~35-150) -- por
-    eso ademas se enmascaran los pixeles de baja saturacion antes de construir
-    el histograma, y si casi no queda pixel "con color" se descarta el recorte
-    entero en vez de devolver un histograma que en realidad es de hielo.
-    """
-    x1, y1, x2, y2 = (int(v) for v in bbox)
-    x1, y1 = max(0, x1), max(0, y1)
-    x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
-    if x2 - x1 < 4 or y2 - y1 < 4:
-        return None
-    h = y2 - y1
-    crop = frame[y1 + int(h * 0.25):y1 + int(h * 0.65), x1:x2]
-    if crop.size == 0:
-        return None
-    hsv_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    color_mask = (hsv_crop[:, :, 1] > JERSEY_SAT_THRESHOLD).astype(np.uint8)
-    if color_mask.mean() < JERSEY_MIN_COLOR_FRACTION:
-        return None  # recorte sin camiseta real visible (fondo, patin, oclusion)
-    hist = cv2.calcHist([hsv_crop], [0, 1], color_mask, [16, 8], [0, 180, 0, 256])
-    cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
-    return hist.flatten()
-
-
-def classify_team(hist, centroids):
-    d0 = float(np.linalg.norm(hist - centroids[0]))
-    d1 = float(np.linalg.norm(hist - centroids[1]))
-    return 0 if d0 < d1 else 1
 
 
 def load_model(local_relpath, hf_repo, hf_file):
@@ -288,7 +244,7 @@ try:
                     det_colors.append(REFEREE_COLOR)
                     det_teams.append(None)
                 elif cls_id == CLASS_PLAYER:
-                    hist = player_jersey_histogram(frame, bbox)
+                    hist = jersey_histogram(frame, bbox)
                     if hist is None:
                         det_colors.append(NO_TEAM_COLOR)
                         det_teams.append(None)
@@ -297,19 +253,13 @@ try:
                         det_colors.append(NO_TEAM_COLOR)
                         det_teams.append(None)
                         if len(team_calib_histograms) >= TEAM_CALIB_SAMPLES:
-                            calib_data = np.array(team_calib_histograms, dtype=np.float32)
-                            best_labels = np.zeros((len(calib_data), 1), dtype=np.int32)
-                            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.1)
-                            _, _, centers = cv2.kmeans(
-                                calib_data, 2, best_labels, criteria, 10, cv2.KMEANS_PP_CENTERS
-                            )
-                            team_centroids = centers
+                            team_centroids = fit_teams(team_calib_histograms)
                             tqdm.write(
                                 f"[equipos] calibrados con {len(team_calib_histograms)} "
                                 f"muestras en el frame {frame_idx}"
                             )
                     else:
-                        team = classify_team(hist, team_centroids)
+                        team = int(team_of([hist], team_centroids)[0][0])
                         det_colors.append(TEAM_COLORS[team])
                         det_teams.append(team)
                 else:
