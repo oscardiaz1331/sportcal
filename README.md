@@ -36,8 +36,9 @@ if est:
     xy_m, inside = project_to_field(est, feet_px, sports.get("hockey-nhl"))
 ```
 
-Whole video with detection, tracking, the rink lines drawn from the estimated H and a minimap (writes `tracked_out.mp4`,
-`tracking_log.csv`): `python -m sportcal.product.hockey_demo nhl11.mp4 [--max-frames 600] [--device cpu]`.
+Whole video with detection, tracking, the field lines drawn from the estimated H and a minimap, for hockey (NHL) or
+soccer (writes `out.mp4`, `tracks.csv` and `status.json` into a new `runs/product/<run>/`, ADR 0006):
+`python -m sportcal.product.video nhl11.mp4 --sport hockey-nhl [--start S] [--end S] [--device cpu]`.
 
 ## Where to read next
 

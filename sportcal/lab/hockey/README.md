@@ -21,7 +21,7 @@ python -m sportcal.lab.hockey.train_detect     # -> runs/hockeyai/yolo26s/weight
 python -m sportcal.lab.hockey.train_pose       # -> runs/hockeyrink/<run>/weights/best_homography.pt
 ```
 
-`product/hockey_demo.py` uses the local weights when present and falls back to the HuggingFace ones.
+`product/video.py` uses the local weights when present and falls back to the HuggingFace ones.
 
 ## Decisions
 

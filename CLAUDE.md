@@ -101,7 +101,7 @@ the minimum code that works.
 ```bash
 venv/Scripts/python.exe -m pytest                                                  # fast suite
 python -m sportcal.lab.common.train_kpline --sport hockey-nhl --eval runs/kpline/finetune/best_h.pt --split fresh --gate
-python -m sportcal.product.hockey_demo nhl11.mp4 [--max-frames 600] [--device cpu]  # minimap video, product pipeline
+python -m sportcal.product.video nhl11.mp4 --sport hockey-nhl --end 20 [--device cpu]  # one video -> runs/product/<run>/
 python -m sportcal.lab.soccer.soccernet_h --root datasets/calibration-2023          # soccer H index
 python -m sportcal.lab.tennis.tennis_h                                             # tennis H index
 python -m streamlit run sportcal/lab/common/annotate_val_app.py                    # hand-label hockey / soccer frames

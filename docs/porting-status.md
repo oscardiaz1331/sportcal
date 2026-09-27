@@ -27,9 +27,9 @@ follow-up pass. The previous layout is tagged `pre-restructure` (`git checkout p
    `docs/experiments/`, keep identifiers stable unless every caller is updated in the same change.
 2. **Promote model + solver out of the lab** so `product/` stops importing `lab/` (ADR 0001, "Known debt"):
    `UNetResNet34` and `load_model/predict_probs` -> `sportcal/models/`, `solve_from_probs` and its helpers -> `core/`.
-3. **Split `product/hockey_demo.py`** (440 lines of module-level script: team classification, puck trail, minimap video)
-   into a `main()` built on `HomographyPipeline`. A soccer estimator (`FieldSolver` behind an `Estimator`) is the natural
-   second product method once soccer has a validation set.
+3. ~~Split `product/hockey_demo.py`~~ **done 2026-09-27** (ADR 0006): replaced by the sport-agnostic worker
+   `product/video.py` and the local web app `product/server.py`. Still open: a soccer estimator (`FieldSolver` behind an
+   `Estimator`) as a second product method once soccer has a validation set.
 4. ~~Run the model-backed estimators against real weights~~ **done 2026-09-21** (ADR 0003, "Verified on real weights"): both estimators
    and the chain work; the YOLO stage is numerically noisy (RANSAC). Still open: a `@pytest.mark.slow` test that needs the weights on disk,
    and trying `cv2.USAC_MAGSAC` as a more stable fit.
@@ -78,7 +78,7 @@ follow-up pass. The previous layout is tagged `pre-restructure` (`git checkout p
 | `training/{klt_propagate,homography_head,cache_seg_probs,auto_label,video_line_explorer}.py` | `sportcal/lab/hockey/archive/` |
 | `training/test-cv-clas.py` | `sportcal/lab/hockey/archive/cv_clas_tracker.py` |
 | `test_colors.py`, `test_lineas.py`, `test_rick.py`, `rink_annotate.py`, `rink_debug.py`, `rink_edges_debug.py`, `field_*.py`, `hsv_scan.py`, `hsv_scan.csv` | `sportcal/lab/hockey/archive/` |
-| `test.py` | `sportcal/product/hockey_demo.py` (script; refuses import) |
+| `test.py` | `sportcal/product/hockey_demo.py`, replaced 2026-09-27 by `sportcal/product/video.py` (ADR 0006) |
 | `training/*.yaml` | `configs/hockey/*.yaml` (`hockeyrink_pose.yaml.bak` deleted) |
 | `training/README.md` | `sportcal/lab/hockey/README.md` (translated) |
 | `rink_keypoints_map.png` | `docs/assets/rink_keypoints_map.png` |
