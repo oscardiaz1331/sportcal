@@ -32,7 +32,26 @@ ends = 32 channels) at p50 0.5 px, max 1.2 px.
 
     python -m sportcal.lab.tennis.tennis_h                                 # -> datasets/tennis_h.jsonl
     python -m sportcal.lab.common.train_kpline --sport tennis-itf --phase pretrain --epochs 20
-    python -m sportcal.lab.common.train_kpline --sport tennis-itf --eval runs/kpline-tennis/pretrain/best_h.pt --split test [--gate]
+    python -m sportcal.lab.common.train_kpline --sport tennis-itf --eval runs/kpline-tennis-itf/pretrain/best_h.pt --split test [--gate]
 
 The per-sport tennis model is the upper bound the template-conditioned model is compared against when tennis is left out
 of its training.
+
+## 2. Per-sport tennis model - `runs/kpline-tennis-itf/pretrain` (scored 2026-10-02)
+
+**What:** the weights in `runs/kpline-tennis-itf/pretrain` (`best_h.pt`, 32 channels, files dated 2026-09-26; the run's
+log and its number of epochs were not kept), scored on the current index:
+
+| split | frames | coverage | p50 | p90 | < 10 px | < 25 px |
+|---|---|---|---|---|---|---|
+| test | 1014 | 100% | 1.7 | 3.3 | 98% | 100% |
+| dev | 1214 | 100% | 1.7 | 3.1 | 98% | 100% |
+
+The plausibility gate changes nothing on `test`. A 340-step smoke run already reached p50 2.0 px on `dev` (2026-09-27):
+as section 1 expected, homogeneous views make tennis easy for a per-sport model.
+**Decision:** this is the upper bound for the held-out-tennis rows of ADR 0005; no further per-sport training needed.
+**Caveats:** the labels come from a court detector (section 1), so 1.7 px is agreement with that detector, not with hand
+clicks; there are no `fresh` tennis labels. The run predates the 2026-09-27 rebuild of the index (same videos, split by a
+stable hash of the video id).
+
+    python -m sportcal.lab.common.train_kpline --sport tennis-itf --eval runs/kpline-tennis-itf/pretrain/best_h.pt --split test --gate

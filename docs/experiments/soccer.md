@@ -756,6 +756,59 @@ on 2026-09-15.
 **Decision:** `train_kpline.corrupted` refuses any batch outside the physical ranges before the forward pass (training:
 skipped and logged, the count on each epoch line; evaluation: scored as misses). The cause is open; if skipped batches
 keep appearing, test the hardware (MemTest86 overnight, XMP profile off) before trusting long runs.
+**The two relaunches died with the PC** (found 2026-10-02): `pretrain-derived-refine` was started twice on 09-27 and
+stopped at epoch 2 (~17:30) and at epoch 4 (~19:18), with no error in its log and no skipped batch. The Windows System
+log has a Kernel-Power 41 for each (boots at 17:35 and 19:20 local time, bugcheck code 0, not during sleep): the machine
+reset without a bugcheck while the training ran next to another heavy job (another session's GPU tracking test; a CPU
+end-to-end video job). The same log: a 0x116 (video driver timeout) bugcheck on 09-16, the corrected cache error of
+09-15, and six Kernel-Power 41 during sleep (a separate problem). A reset without a bugcheck under combined CPU + GPU
+load points at the power supply or the temperature, and the corrupted batches of the same day fit an unstable machine.
+Until the hardware is checked: one heavy job at a time (nothing else on the CPU or the GPU while a training runs), and
+a run that dies continues from its `last.pt` into another folder (`--init <last.pt> --tag=-cont`).
 **Relaunched** on the section 23 index: `runs/kpline-soccer-fifa/pretrain-derived-refine` (log next to the folder).
 `--tag` takes its value with `=` (`--tag=-refine`): argparse reads `--tag -refine` as a missing value, and the section 22
 run was started as `--tag circlefit`, hence its folder name.
+
+## 25. E1 on the refit index - `runs/kpline-soccer-fifa/pretrain-derived-refine` (2026-10-02)
+
+**Run:** `train_kpline --sport soccer-fifa --phase pretrain --keypoints derived --epochs 20 --tag=-refine` on the section
+23 index (11232 train frames: 7462 `lines`, 1369 `lines+circle`, 2401 `lines-ls`), alone on the machine: 4 h 50 min,
+no skipped batch, no reset (section 24). Dev at its best checkpoint (epoch 19): coverage 90%, p50 6.9 px.
+**Against the previous E1** (`runs/kpline-soccer/pretrain-derived`, trained on the `lines` rows only), both scored on the
+same rows of the current index (px at 1920, percentages of all frames):
+
+| split | rows | model | gate | coverage | p50 | p90 | < 10 px | < 25 px |
+|---|---|---|---|---|---|---|---|---|
+| test | 2135 | previous | no | 83% | 7.0 | 23.0 | 57% | 76% |
+| test | 2135 | previous | yes | 80% | 6.8 | 17.5 | 57% | 76% |
+| test | 2135 | refit index | no | 90% | 6.6 | 18.6 | 64% | 84% |
+| test | 2135 | refit index | yes | 89% | 6.5 | 17.0 | 64% | 84% |
+| test, `lines` | 1363 | previous | yes | 92% | 6.5 | 17.0 | 67% | 89% |
+| test, `lines` | 1363 | refit index | yes | 93% | 6.2 | 16.5 | 68% | 90% |
+| test, `lines+circle` | 325 | previous | yes | 11% | 17.3 | 295.4 | 2% | 7% |
+| test, `lines+circle` | 325 | refit index | yes | 64% | 7.4 | 32.9 | 42% | 55% |
+| test, `lines-ls` | 447 | previous | yes | 91% | 7.1 | 16.9 | 66% | 86% |
+| test, `lines-ls` | 447 | refit index | yes | 93% | 6.8 | 16.4 | 68% | 89% |
+| fresh | 19 | previous | either | 74% | 9.1 | 13.6 | 47% | 74% |
+| fresh | 19 | refit index | either | 100% | 7.7 | 16.0 | 63% | 100% |
+
+PnLCalib on `fresh` (section 18, 18 frames): coverage 100%, p50 10.3, p90 15.3, < 10 px 50%.
+**Reading:**
+
+* The centre-circle views of `fresh` are answered now: f1500 4.0, f1550 5.2, f1650 3.4, f1700 9.0 px, and soccer2 f3000
+  (refused before) 8.0 px. That is the data, as section 20 concluded: the same keypoints, with circle views in the index.
+* On the 14 `fresh` frames both models answer, the new one is within ~2 px of the old one except soccer2 f0 (8.8 ->
+  21.8 px); nothing else moved by more than the label noise.
+* The `lines-ls` rows were ordinary views the old model already answered (91%); the gain on `test` is the circle views
+  (11% -> 64% gated), which remain the weakest subset: a third of them still get no answer or a refused one.
+* The plausibility gate costs 1 point of coverage on `test` and takes p90 from 18.6 to 17.0; it refuses nothing on `fresh`.
+
+**Decision:** this is the soccer model: it matches PnLCalib's coverage on `fresh` and is ahead on p50 (7.7 against 10.3)
+and on frames under 10 px (63% against 50%). Next: soccer in the product (`product/video.py` still points at the
+previous weights).
+**Caveats:** `fresh` is 19 frames from two clips (two frames are 10 points), and PnLCalib was scored on 18 of them. The
+circle fit (section 22) and the refit (section 23) entered training together: their separate effect is only visible by
+subset, above.
+
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --eval runs/kpline-soccer-fifa/pretrain-derived-refine/best_h.pt --split fresh --gate
+    python -m sportcal.lab.common.train_kpline --sport soccer-fifa --eval runs/kpline-soccer-fifa/pretrain-derived-refine/best_h.pt --split test --gate

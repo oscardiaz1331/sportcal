@@ -84,9 +84,13 @@ the minimum code that works.
 * Current standing (target ~8 px on frames nothing was tuned on):
   * Hockey: model A2 (`runs/kpline/finetune/best_h.pt`) + plausibility gate, 97% coverage, p50 7.2 px on the `fresh`
     games; on video with `smooth=0.1` (KLT) the jitter falls ~10x (ADR 0003, hockey.md 14g-14i). YOLO: ~100 px.
-  * Soccer: model E1 (`runs/kpline-soccer/pretrain-derived`), SoccerNet test p50 6.5 px; on our `fresh` labels it
-    misses centre-circle views for lack of such frames in the index (soccer.md 20-22; `fit_circle` recovers them).
-  * Tennis: template + index ready (`tennis.md`), no model yet.
+  * Soccer: model E1 on the refit index (`runs/kpline-soccer-fifa/pretrain-derived-refine`), gated: SoccerNet test
+    89% coverage, p50 6.5 px; our `fresh` labels 100% coverage, p50 7.7 px, centre-circle views included (PnLCalib:
+    10.3 px). Circle views are still the weakest subset of `test` (soccer.md 22-25).
+  * Tennis: per-sport model `runs/kpline-tennis-itf/pretrain`, test p50 1.7 px against detector-made labels, no
+    `fresh` labels (`tennis.md`).
+  * The PC has reset under combined CPU + GPU load and once fed corrupted batches (soccer.md 24): one heavy job at a
+    time while a training runs.
 * Keypoint + line model commands: `python -m sportcal.lab.common.train_kpline --sport <hockey-nhl|soccer-fifa|tennis-itf>`;
   new runs go to `runs/kpline-<sport>/`; the index is `datasets/<family>_h.jsonl`.
 * Splits: `fresh` = hand labels of games nothing was tuned on - never train on it or pick thresholds with it.
