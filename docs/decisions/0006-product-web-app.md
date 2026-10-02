@@ -35,9 +35,12 @@ Rejected:
 | Sport | Homography model | Player detector | Roles | Ball | `imgsz` | Smoothing |
 |---|---|---|---|---|---|---|
 | `hockey-nhl` | A2, `runs/kpline/finetune/best_h.pt` | `runs/hockeyai/yolo26s/weights/best.pt`, fallback `SimulaMet-HOST/HockeyAI` on the Hub | player; goalie and referee in fixed colours | puck | 800 (measured in the old demo) | `hold_frames=15`, `smooth=0.1` (ADR 0003, hockey.md 14i) |
-| `soccer-fifa` | E1, `runs/kpline-soccer/pretrain-derived/best_h.pt` | `yolo26m.pt` (COCO, repo root; ultralytics downloads it by name if missing) | person = player | sports ball | 1280 (not measured) | the same, **not measured on soccer** |
+| `soccer-fifa` | E1 on the refit index, `runs/kpline-soccer-fifa/pretrain-derived-refine/best_h.pt` (since 2026-10-02, soccer.md 25; before: `runs/kpline-soccer/pretrain-derived`) | `yolo26m.pt` (COCO, repo root; ultralytics downloads it by name if missing) | person = player | sports ball | 1280 (not measured) | the same, **not measured on soccer** |
 
-* Tennis joins when its model has an evaluation write-up (`tennis.md`): one row of this table.
+* Tennis: its model is scored now (tennis.md 2), but joining is more than the one row this ADR first promised. Players
+  stand metres behind the baselines, outside the 1 m slack `project_to_field` allows and off the minimap; the camera
+  looks along the court, so the minimap should stand upright; there is no tennis video on disk to check the result on
+  (the dataset is single frames), and no hand labels. Open, the owner's call.
 * IIHF stays out: A2 predicts the NHL template.
 * Sport auto-detection comes later, as one more value of the `sport` parameter (`auto`).
 * No frame stride (process 1 frame in k), no audio in the output.
@@ -189,7 +192,8 @@ Each check is broken once on purpose to see it go red.
 ## Honest status
 
 * Soccer: the smoothing, `imgsz` 1280 and team colours are unmeasured there; COCO `person` does not tell referees or
-  goalkeepers apart; E1 misses centre-circle views (soccer.md 20-22), which become refusals and holds.
+  goalkeepers apart. The first E1 missed centre-circle views (soccer.md 20-22); the weights in use since 2026-10-02
+  answer them (soccer.md 25, and "Soccer weights switched" below).
 * A wrong homography that a real camera could produce still passes the gate (ADR 0003).
 * Speed, end to end (detector + homography model + drawing + encoding), 1080p: 5.7 frames/s for hockey and 6.5 for
   soccer on the GPU (one 10 s clip each, 2026-10-02); about 0.9 frames/s on CPU (2026-09-27, with a training running).
@@ -212,9 +216,17 @@ Seen on those two clips, not measured:
 * The first run of this check (2026-09-27, CPU job next to a GPU training) ended with the PC going down hard; the
   training died with it. Cause unknown (soccer.md 24 suspects the hardware): do not run a job next to a training.
 
+## Soccer weights switched (2026-10-02)
+
+From `runs/kpline-soccer/pretrain-derived` to `runs/kpline-soccer-fifa/pretrain-derived-refine`, on the lab numbers of
+soccer.md 25 (`fresh`: coverage 74% -> 100%, p50 9.1 -> 7.7 px). Through the product, `soccer.mp4` 60-70 s (the
+centre-circle stretch of the `fresh` frames), GPU, everything else equal: frames with at least one player position
+111 / 250 with the old weights, 250 / 250 with the new ones; where both answer, the projected lines sit on the painted
+ones alike. One clip: a check that the switch does what the lab numbers say, not a measurement.
+
 ## What would change this
 
 * Someone else using it: authentication, a queue, perhaps a deployment. The worker and its CLI stay as they are.
 * Many long videos: a queue and a frame stride.
 * Sport auto-detection: a classifier behind `sport=auto`.
-* The refined E1 run (`runs/kpline-soccer-fifa/pretrain-derived-refine`) beating E1 on `fresh`: one path in the table.
+* ~~The refined E1 run beating E1 on `fresh`: one path in the table~~ done 2026-10-02, see above.

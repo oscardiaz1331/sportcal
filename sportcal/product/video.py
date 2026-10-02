@@ -48,7 +48,7 @@ SPORTS = {
         imgsz=800, hold_frames=15, smooth=0.1),
     "soccer-fifa": dict(
         label="Fútbol",
-        kpline=RUNS / "kpline-soccer" / "pretrain-derived" / "best_h.pt",
+        kpline=RUNS / "kpline-soccer-fifa" / "pretrain-derived-refine" / "best_h.pt",
         detector=ROOT / "yolo26m.pt",  # COCO; ultralytics downloads it by name when missing
         detector_hub=None,
         roles={"person": "player", "sports ball": "ball"},
