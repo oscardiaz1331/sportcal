@@ -55,3 +55,35 @@ clicks; there are no `fresh` tennis labels. The run predates the 2026-09-27 rebu
 stable hash of the video id).
 
     python -m sportcal.lab.common.train_kpline --sport tennis-itf --eval runs/kpline-tennis-itf/pretrain/best_h.pt --split test --gate
+
+## 3. How many labels does tennis need? - `train_kpline --limit` (2026-10-02)
+
+**Question:** before building the template-conditioned model (ADR 0005), what does a new sport cost with the model we
+have - a per-sport model A trained on a few labels?
+**Method:** `--limit N` keeps the first N train rows of one shuffle (seed 0; the 10 are among the 50, the 50 among the
+200) and repeats them, so every run makes the same ~3300 steps (two epochs of the full set's length) from the ImageNet
+encoder, with the usual augmentation. None of the N frames shares a video with `dev` or `test`. Scored on `test` (1014
+frames, 58 videos), px at 1920:
+
+| labels | videos | checkpoint | coverage | p50 | p90 | < 10 px | < 25 px |
+|---|---|---|---|---|---|---|---|
+| 10 | 10 | last | 100% | 2.0 | 3.8 | 98% | 100% |
+| 50 | 47 | last | 100% | 1.7 | 3.3 | 98% | 100% |
+| 200 | 138 | last | 100% | 1.9 | 3.6 | 98% | 100% |
+| 6612 (section 2) | 380 | best on dev | 100% | 1.7 | 3.3 | 98% | 100% |
+
+The last checkpoint is the honest row (a new sport has no labelled `dev` to choose with); the best-on-dev checkpoints
+score the same to 0.1 px. After the first epoch (~1650 steps) the 10-label run was already at p50 2.4 px on `dev`.
+**Reading:** ten labelled frames give what 6612 give. Tennis broadcasts are one view of one court, and the exact camera
+augmentation (`ptz_warp`) covers the pans and zooms around it. The differences between 10, 50 and 200 (2.0 / 1.7 / 1.9)
+are one run each and within noise.
+**Decision:** for a sport like tennis a new sport costs a template and about ten labels, so the template-conditioned
+model has no practical case here; and tennis cannot separate few-shot methods (ADR 0005's few-shot rows would all read
+~2 px). What is left for the held-out-tennis test is the zero-shot row only.
+**Caveats:** the labels and the test "truth" come from the same court detector (section 1), so this is agreement with
+it; one seed, one subset per N; the 10 frames come from 10 different videos, the favourable way to spend ten labels.
+This says nothing about sports with many kinds of view: hockey with 614 NHL rows still finds a third of its points
+(hockey.md section 16), and soccer was trained on thousands of frames.
+
+    python -m sportcal.lab.common.train_kpline --sport tennis-itf --phase pretrain --limit 10 --epochs 2 --eval-every 1 --tag=-n10
+    python -m sportcal.lab.common.train_kpline --sport tennis-itf --eval runs/kpline-tennis-itf/pretrain-n10/last.pt --split test

@@ -59,6 +59,11 @@ What the code and data already give:
 
    The few-shot control is the lazy alternative: if a new named head on a shared backbone matches the conditioned
    model at 50 labels, the conditioning is not worth its code for adding sports, and only the zero-shot row argues for it.
+   **Result (2026-10-02, tennis.md section 3):** the control did not even need the shared backbone. A per-sport model
+   A from the ImageNet encoder reaches p50 2.0 px on tennis `test` with 10 labels and 1.7 px with 50 - the 6612-label
+   number. For a one-view sport like tennis the conditioning has no practical case, and the few-shot rows cannot tell
+   methods apart; only the zero-shot row is still informative. Whether to build the conditioned model for that row
+   alone is the owner's call; a held-out sport with many kinds of view would be the test that matters for the product.
 
 ## Options considered
 

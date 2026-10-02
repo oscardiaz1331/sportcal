@@ -158,6 +158,10 @@ def train(args, rows, device):
     tr = select(rows, args.phase, args.sport)
     if args.templates:
         tr = [r for r in tr if r["template"] in args.templates]
+    if args.limit:      # few labels: the first N of one shuffle (seed 0, so a smaller N is a subset of a larger one),
+        # repeated so that an epoch keeps its number of steps
+        few = [tr[i] for i in np.random.default_rng(0).permutation(len(tr))[:args.limit]]
+        tr = few * (len(tr) // args.limit)
     sport = sports.get(args.sport)
     dev = [r for r in rows if r["split"] == "dev" and r["template"] == args.sport]
     kp = keypoints(args.keypoints, tr + dev)
@@ -168,7 +172,8 @@ def train(args, rows, device):
         raise SystemExit("--init is inside {}: continue into another folder with --tag".format(out))
     out.mkdir(parents=True, exist_ok=True)
     nch = n_channels(sport, kp[args.sport])
-    print("{}: {} train frames, {} dev frames, {} channels -> {}".format(args.phase, len(tr), len(dev), nch, out))
+    print("{}: {} train frames ({} distinct), {} dev frames, {} channels -> {}".format(
+        args.phase, len(tr), len({r["id"] for r in tr}), len(dev), nch, out))
     model = HalfResUNet(ncls=nch).to(device)
     if args.init:
         model.load_state_dict(torch.load(args.init, map_location=device))
@@ -239,6 +244,7 @@ def main():
                     help="keypoint set to train (runs go to <phase>-derived); --eval reads it from the weights")
     ap.add_argument("--templates", nargs="+", choices=sports.names(),
                     help="train on the rows of these templates only (default: every template of the index)")
+    ap.add_argument("--limit", type=int, default=0, help="train on this many random train rows only (few-label runs)")
     ap.add_argument("--tag", default="", help="suffix of the run folder, e.g. --tag=-cont (with =) to continue a run without overwriting it")
     ap.add_argument("--gate", action="store_true", help="with --eval: refuse the H no real camera gives (hockey.md 14d)")
     args = ap.parse_args()
