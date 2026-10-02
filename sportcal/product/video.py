@@ -35,7 +35,7 @@ from sportcal.product.kpline import KplineEstimator
 from sportcal.product.pipeline import HomographyPipeline, project_to_field
 
 JOBS_DIR = RUNS / "product"
-ID_PATTERN = re.compile(r"^\d{8}-\d{6}-[A-Za-z0-9_-]{1,40}$")
+ID_PATTERN = re.compile(r"^\d{8}-\d{6}-[A-Za-z0-9_-]{1,40}\Z")  # \Z, not $: $ would let a trailing newline through
 
 # What differs per sport (ADR 0006, "Scope of v1"). roles: detector class name -> role in the product.
 SPORTS = {
@@ -83,6 +83,8 @@ def new_run_folder(jobs_dir, name):
 def frame_range(n_frames, fps, start_s=0.0, end_s=None):
     """[first, last) frame indices of the stretch [start_s, end_s) seconds. With `n_frames` None (a container that
     does not say how long it is) and no `end_s`, `last` is None: the caller reads until the video ends."""
+    if start_s < 0:
+        raise JobError("el inicio no puede ser negativo")
     first = int(round(start_s * fps))
     last = None if end_s is None else int(round(end_s * fps))
     if n_frames is not None:
@@ -166,6 +168,17 @@ def track_rows(frame, fps, shot_id, ids, roles, teams, world, inside):
             for i in np.flatnonzero(inside)]
 
 
+def one_ball(roles, confidence):
+    """Mask of the detections to keep: everything but the balls other than the most confident one (the first, when
+    there are no confidences). A frame holds one ball, and every false one would send the trail across the field."""
+    keep = np.ones(len(roles), bool)
+    balls = [i for i, r in enumerate(roles) if r == "ball"]
+    if len(balls) > 1:
+        best = balls[0] if confidence is None else max(balls, key=lambda i: confidence[i])
+        keep[[i for i in balls if i != best]] = False
+    return keep
+
+
 def detector_weights(cfg):
     """The detector's local weights, else its copy on the Hugging Face Hub, else the bare file name, which ultralytics
     downloads for its stock models."""
@@ -225,7 +238,9 @@ def process_video(video, sport, out_dir, start_s=0.0, end_s=None, device="cuda:0
         csv_file = open(out / "tracks.csv", "w", newline="", encoding="utf-8")
         rows = csv.writer(csv_file)
         rows.writerow(["frame", "time_s", "shot_id", "track_id", "role", "team", "x_m", "y_m"])
-        cuts, tracker, shot_id = ContentDetector(), ByteTrackTracker(), 0
+        # ponytail: ByteTrack with its stock thresholds, only told the frame rate (its lost-track buffer is in frames);
+        # whether it swaps players too often to keep is what hockey.md section 15 sets out to measure
+        cuts, tracker, shot_id = ContentDetector(), ByteTrackTracker(frame_rate=fps), 0
         jerseys, centres, trail = [], None, deque(maxlen=TRAIL)
         idx, t0, cancelled = first, time.monotonic(), False
         while last is None or idx < last:
@@ -236,16 +251,20 @@ def process_video(video, sport, out_dir, start_s=0.0, end_s=None, device="cuda:0
             if not ok:
                 break
             if cuts.process_frame(FrameTimecode(idx, fps=fps), cv2.resize(frame, small)):
-                tracker, shot_id = ByteTrackTracker(), shot_id + 1  # ids and the carried H belong to their shot
+                tracker, shot_id = ByteTrackTracker(frame_rate=fps), shot_id + 1  # ids and H belong to their shot
                 homography.reset()
                 trail.clear()
             est = homography(frame)
             found = detector.predict(source=frame, conf=0.25, imgsz=cfg["imgsz"], classes=list(roles),
                                      verbose=False, device=device)[0]
             tracked = tracker.update(detections=sv.Detections.from_ultralytics(found))
+            tracked = tracked[one_ball([roles[int(c)] for c in tracked.class_id], tracked.confidence)]
             ids = tracked.tracker_id
             role = [roles[int(c)] for c in tracked.class_id]
             team = [None] * len(tracked)
+            # ponytail: the two teams are fitted on the first TEAM_SAMPLES jerseys seen, in any shot and with or
+            # without a homography - a video that opens on the crowd or a close-up fixes wrong teams for good.
+            # Upgrade: collect only from players that project inside the field
             for i in (i for i, r in enumerate(role) if r == "player"):
                 hist = jersey_histogram(frame, tracked.xyxy[i])
                 if hist is None:
@@ -281,11 +300,7 @@ def process_video(video, sport, out_dir, start_s=0.0, end_s=None, device="cuda:0
                     if ids[i] >= 0:
                         cv2.putText(mini, str(ids[i]), (px[0] + 7, px[1] - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
                                     (30, 30, 30), 1)
-            for k in range(1, len(trail)):  # the ball's recent path, fading into the past
-                (p1, _), (p2, c) = trail[k - 1], trail[k]
-                cv2.line(mini, p1, p2, tuple(int(v * k / len(trail)) for v in c), 2)
-            if ball:
-                cv2.circle(mini, trail[-1][0], 4, ROLE_COLOURS["ball"], -1)
+            draw.ball_trail(mini, trail, ball, ROLE_COLOURS["ball"])
             cv2.putText(vis, "H: sin calibrar" if est is None else f"H: {est.method}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
             vis[h - mh - 10:h - 10, 10:10 + mw] = mini
@@ -295,6 +310,8 @@ def process_video(video, sport, out_dir, start_s=0.0, end_s=None, device="cuda:0
             status.update(frame=done, speed=round(done / (time.monotonic() - t0), 2))
             if done % 100 == 0:
                 print(f"{done} frames, {status.fields['speed']} frames/s", flush=True)
+        if idx == first and not cancelled:  # a stretch past the end of a video that did not say its length
+            raise JobError("no hay ningún frame en ese tramo del vídeo")
         state = "cancelled" if cancelled else "done"
     except JobError as e:
         status.fields["error"] = str(e)

@@ -58,3 +58,16 @@ def draw_field(img, H, sport, colour=(0, 255, 255), thickness=1):
     for run in field_lines(H, sport, w, h):
         cv2.polylines(img, [np.round(run).astype(np.int32)], False, colour, thickness, cv2.LINE_AA)
     return img
+
+
+def ball_trail(img, trail, here, colour=(255, 255, 255)):
+    """The ball's recent path on the minimap `img` (in place): `trail` is [((x, y) pixels, BGR colour)], oldest first,
+    drawn fading into the past. With `here` (the ball was seen in this frame) the ball itself is drawn at the last
+    point, with a dark ring: a white puck does not show on white ice without one."""
+    for k in range(1, len(trail)):
+        (p1, _), (p2, c) = trail[k - 1], trail[k]
+        cv2.line(img, p1, p2, tuple(int(v * k / len(trail)) for v in c), 2)
+    if here:
+        cv2.circle(img, trail[-1][0], 4, colour, -1)
+        cv2.circle(img, trail[-1][0], 5, (30, 30, 30), 1)
+    return img

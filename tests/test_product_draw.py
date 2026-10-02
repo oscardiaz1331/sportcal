@@ -1,8 +1,18 @@
 """The product's drawing for any sport (ADR 0006): minimap orientation, field lines behind the camera."""
 import numpy as np
 
-from sportcal.product.draw import field_lines, minimap
+from sportcal.product.draw import ball_trail, field_lines, minimap
 from sportcal.sports import get
+
+
+def test_the_ball_shows_on_ice():
+    """A white puck on near-white ice: the dark ring around it is what makes it visible."""
+    ice = np.full((60, 60, 3), 245, np.uint8)
+    ball_trail(ice, [((30, 30), (0, 200, 0))], here=True)
+    assert ice.min() < 100
+    unseen = np.full((60, 60, 3), 245, np.uint8)
+    ball_trail(unseen, [((30, 30), (0, 200, 0))], here=False)      # not detected in this frame: no ball drawn
+    assert (unseen == 245).all()
 
 
 def test_minimap_puts_the_field_corners_on_its_corners_the_way_the_main_camera_sees_them():
