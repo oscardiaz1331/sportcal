@@ -273,10 +273,16 @@ def process_video(video, sport, out_dir, start_s=0.0, end_s=None, device="cuda:0
             ids = tracked.tracker_id
             role = [roles[int(c)] for c in tracked.class_id]
             team = [None] * len(tracked)
-            # ponytail: the two teams are fitted on the first TEAM_SAMPLES jerseys seen, in any shot and with or
-            # without a homography - a video that opens on the crowd or a close-up fixes wrong teams for good.
-            # Upgrade: collect only from players that project inside the field
-            for i in (i for i, r in enumerate(role) if r == "player"):
+            # Only what stands on the field (or within its margin) counts - boxed, given a team, put on the minimap,
+            # logged. The bench, the crowd and the officials at the back wall are detected too, and with no homography
+            # nobody can be placed on the field: then nothing is drawn.
+            world, inside = (project_to_field(est, feet(tracked.xyxy), field, margin=cfg["margin"])
+                             if est is not None else (None, np.zeros(len(tracked), bool)))
+            on_field = np.flatnonzero(inside)
+            # ponytail: the two teams are fitted once, on the first TEAM_SAMPLES jerseys seen on the field, and never
+            # again - a video whose first shots show mostly one team, or officials, fixes wrong teams for good.
+            # Upgrade: refit when the two clusters stop separating
+            for i in (i for i in on_field if role[i] == "player"):
                 hist = jersey_histogram(frame, tracked.xyxy[i])
                 if hist is None:
                     continue
@@ -288,17 +294,16 @@ def process_video(video, sport, out_dir, start_s=0.0, end_s=None, device="cuda:0
                     centres = fit_teams(jerseys)
             colour = [TEAM_COLOURS[t] if t is not None else ROLE_COLOURS.get(r, NO_TEAM) for r, t in zip(role, team)]
             vis, mini, ball = frame.copy(), base.copy(), False
-            for (bx1, by1, bx2, by2), tid, c in zip(tracked.xyxy.astype(int), ids, colour):
-                cv2.rectangle(vis, (bx1, by1), (bx2, by2), c, 2)
-                if tid >= 0:
-                    cv2.putText(vis, f"#{tid}", (bx1, max(15, by1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c, 2)
+            for i in on_field:
+                bx1, by1, bx2, by2 = (int(v) for v in tracked.xyxy[i])
+                cv2.rectangle(vis, (bx1, by1), (bx2, by2), colour[i], 2)
+                if ids[i] >= 0:
+                    cv2.putText(vis, f"#{ids[i]}", (bx1, max(15, by1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour[i], 2)
             if est is not None:
                 draw.draw_field(vis, est.H, field)
-                world, inside = project_to_field(est, feet(tracked.xyxy), field, margin=cfg["margin"])
                 rows.writerows(track_rows(idx, fps, shot_id, ids, role, team, world, inside))
-                owners = [(team[i], world[i]) for i in np.flatnonzero(inside)
-                          if role[i] == "player" and team[i] is not None]
-                for i in np.flatnonzero(inside):
+                owners = [(team[i], world[i]) for i in on_field if role[i] == "player" and team[i] is not None]
+                for i in on_field:
                     px = tuple(int(v) for v in np.round(to_px(world[i])[0]))
                     if role[i] == "ball":
                         near = min(owners, key=lambda o: np.hypot(*(o[1] - world[i])), default=None)

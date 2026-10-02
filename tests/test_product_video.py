@@ -175,7 +175,7 @@ def stand_ins(monkeypatch):
             pass
 
         def estimate(self, frame):
-            return Estimate(script.H, 1.0, self.name)
+            return None if script.H is None else Estimate(script.H, 1.0, self.name)  # H None: it refuses
 
     real_tracker = V.ByteTrackTracker
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=Detector))
@@ -215,6 +215,32 @@ def test_a_video_that_does_not_say_its_length_is_read_to_its_end(tmp_path, stand
     # and a stretch past its end is a failure with a message, not a "done" with no video
     assert V.process_video(clip, "hockey-nhl", tmp_path / "late", start_s=5.0, device="cpu") == "failed"
     assert "tramo" in status_of(tmp_path / "late")["error"] and not (tmp_path / "late" / "out.mp4").exists()
+
+
+def boxed(frame, b):
+    """True when a box is drawn around `b` in a decoded frame: its top edge is coloured where the frame is grey."""
+    x1, y1, x2, _ = (int(v) for v in b)
+    edge = frame[y1 - 1:y1 + 2, x1 + 2:x2 - 2].astype(int)
+    return np.abs(edge - edge.mean(axis=2, keepdims=True)).mean() > 20
+
+
+def last_frame(run):
+    with av.open(str(run / "out.mp4")) as c:
+        return [f.to_ndarray(format="bgr24") for f in c.decode(video=0)][-1]
+
+
+def test_only_what_stands_on_the_field_is_boxed(tmp_path, stand_ins):
+    """The bench, the crowd, a line judge at the back wall are detected but are not on the field: no box. And with no
+    homography nobody can be placed on the field, so nobody is boxed."""
+    on, off = box(20, 10), box(30, 30)                               # on the ice; 4 m outside the boards
+    stand_ins.frames = [[(on, 0.9, "player"), (off, 0.9, "player")]] * 4
+    clip = big_video(tmp_path / "v.mp4", 4)
+    assert V.process_video(clip, "hockey-nhl", tmp_path / "run", device="cpu") == "done"
+    frame = last_frame(tmp_path / "run")
+    assert boxed(frame, on) and not boxed(frame, off)
+    stand_ins.H = None
+    assert V.process_video(clip, "hockey-nhl", tmp_path / "blind", device="cpu") == "done"
+    assert not boxed(last_frame(tmp_path / "blind"), on)
 
 
 def test_every_product_sport_is_a_registered_sport_with_a_full_row():
