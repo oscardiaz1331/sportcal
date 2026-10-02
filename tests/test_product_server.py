@@ -15,7 +15,10 @@ from sportcal.product import server  # noqa: E402
 # Stands in for `python -m sportcal.product.video`: the same options, a `running` status written like the real worker
 # (its own pid and start time, atomic replace retried), then it waits for the cancel flag (or 30 s) and ends cancelled.
 FAKE_WORKER = r'''
-import argparse, json, os, time, psutil
+import argparse, ctypes, json, os, time, psutil
+def console_window():  # True when this process sits in a console window the owner can see (and close)
+    hwnd = ctypes.windll.kernel32.GetConsoleWindow() if os.name == "nt" else 0
+    return bool(hwnd and ctypes.windll.user32.IsWindowVisible(hwnd))
 ap = argparse.ArgumentParser()
 for opt in ("--sport", "--out", "--device", "--name"):
     ap.add_argument(opt)
@@ -25,7 +28,8 @@ ap.add_argument("--end", type=float)
 a = ap.parse_args()
 def write(state):
     s = dict(state=state, pid=os.getpid(), pid_started=psutil.Process().create_time(), sport=a.sport,
-             video_name=a.name, start_s=a.start, end_s=a.end, device=a.device, frame=0, total=10)
+             video_name=a.name, start_s=a.start, end_s=a.end, device=a.device, frame=0, total=10,
+             window=console_window())
     tmp = os.path.join(a.out, "status.tmp")
     with open(tmp, "w") as f:
         json.dump(s, f)
@@ -48,7 +52,8 @@ def client(tmp_path):
     worker = tmp_path / "fake_worker.py"
     worker.write_text(FAKE_WORKER)
     jobs = tmp_path / "jobs"
-    with TestClient(server.make_app(jobs, [sys.executable, str(worker)])) as c:
+    app = server.make_app(jobs, [sys.executable, str(worker)])
+    with TestClient(app, base_url="http://127.0.0.1:8000") as c:  # the only host the app answers to
         c.jobs = jobs
         yield c
         for f in jobs.iterdir():  # release any stand-in still waiting
@@ -56,9 +61,10 @@ def client(tmp_path):
                 (f / "cancel").touch()
 
 
-def post(client, name="clip.mp4", **form):
+def post(client, name="clip.mp4", headers=None, **form):
     data = {"sport": "hockey-nhl", "start_s": "0", "end_s": "", "device": "cpu", **form}
-    return client.post("/api/jobs", files={"video": (name, b"not really a video", "video/mp4")}, data=data)
+    return client.post("/api/jobs", files={"video": (name, b"not really a video", "video/mp4")}, data=data,
+                       headers=headers)
 
 
 def wait_state(client, jid, state, timeout=20):
@@ -76,7 +82,9 @@ def test_one_job_at_a_time_and_cancel_stops_it(client):
     assert r.status_code == 201, r.text
     jid = r.json()["id"]
     assert (client.jobs / jid / "input.mp4").read_bytes() == b"not really a video"
-    assert wait_state(client, jid, "running")["sport"] == "hockey-nhl"
+    job = wait_state(client, jid, "running")
+    assert job["sport"] == "hockey-nhl"
+    assert job["window"] is False                                   # no console window whose closing kills the job
     assert post(client).status_code == 409                          # the GPU is not shared between jobs
     assert client.delete(f"/api/jobs/{jid}").status_code == 409      # nor a folder deleted under its worker
     assert client.post(f"/api/jobs/{jid}/cancel").status_code == 200
@@ -138,6 +146,21 @@ def test_a_running_status_without_its_worker_lists_as_interrupted(client):
     job = client.get("/api/jobs").json()[0]
     assert job["state"] == "interrupted" and job["log_tail"] == ["Traceback: boom"]
     assert post(client).status_code == 201                          # a dead job does not hold the lock
+
+
+def test_requests_from_another_site_are_refused(client):
+    """A page of another site, open in the owner's browser, must not start, cancel or delete jobs here; nor may a
+    name that resolves to 127.0.0.1 (DNS rebinding) read them."""
+    folder = client.jobs / "20260927-120000-done"
+    folder.mkdir()
+    (folder / "status.json").write_text(json.dumps({"state": "done"}))
+    evil = {"Origin": "http://evil.example"}
+    assert post(client, headers=evil).status_code == 403
+    assert client.delete(f"/api/jobs/{folder.name}", headers=evil).status_code == 403
+    assert client.post(f"/api/jobs/{folder.name}/cancel", headers=evil).status_code == 403
+    assert [f.name for f in client.jobs.iterdir()] == [folder.name]    # nothing started, nothing deleted
+    assert client.get("/api/jobs", headers={"Host": "evil.example"}).status_code == 400
+    assert client.delete(f"/api/jobs/{folder.name}", headers={"Origin": "http://127.0.0.1:8000"}).status_code == 200
 
 
 def test_a_status_file_of_nul_bytes_lists_as_interrupted(client):

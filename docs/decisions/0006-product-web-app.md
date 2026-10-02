@@ -89,7 +89,7 @@ never reused (a reused run folder once overwrote a best checkpoint). `<label>` i
 | `input.<ext>` | server | the upload (CLI runs read their video where it is) |
 | `status.json` | worker only | `state` (`running`, `done`, `failed`, `cancelled`), `pid`, `pid_started`, `sport`, `video_name`, `start_s`, `end_s`, `device`, `frame` (frames processed), `total` (frames in the range), `speed` (frames processed per second), `error`, `created` and `finished` (ISO 8601). Written first thing at start-up, then about once a second, atomically (temp file + `os.replace`) |
 | `out.mp4` | worker | the annotated video, closed in a `finally` so that a failed or cancelled job keeps what it processed |
-| `tracks.csv` | worker | `frame, time_s, shot_id, track_id, role, team, x_m, y_m`; `role` in `player, goalie, referee, ball`; rows only with a homography and inside the field |
+| `tracks.csv` | worker | `frame, time_s, shot_id, track_id, role, team, x_m, y_m`; `role` in `player, goalie, referee, ball`; rows only with a homography and inside the field. `frame` and `time_s` count from the start of the source video, not of `out.mp4` |
 | `worker.log` | worker (stdout, stderr) | progress and tracebacks |
 | `cancel` | server | flag file; the worker checks it every frame and stops cleanly |
 
@@ -116,9 +116,10 @@ process instead of probing it.
 * **One job at a time**: an `asyncio.Lock` covers "check that nothing runs, create the folder, launch, wait for the
   first status", so two quick submissions cannot both start. `ponytail:` single uvicorn process and a global lock;
   upgrade to a queue when several videos need to wait in line.
-* The worker is launched detached (Windows: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`), stdout and stderr to
+* The worker is launched on its own (Windows: `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`), stdout and stderr to
   `worker.log`: closing the tab, stopping the server or closing its console does not stop a job. A restarted server
-  finds the job through its `status.json`.
+  finds the job through its `status.json`. Not `DETACHED_PROCESS`: the venv's `python.exe` is a launcher, and the real
+  interpreter it starts then gets a visible console window of its own, whose closing kills the job.
 * The upload is spooled by Starlette to the system temp folder and then copied into the run folder: a whole game needs
   twice its size free on disk for a moment.
 
@@ -132,6 +133,11 @@ process instead of probing it.
   separator) is `400` and touches nothing.
 * A video the worker cannot open ends as `failed` with the message; a broken or aborted upload removes the half-made
   folder.
+* Other sites: the app answers only to the host names `127.0.0.1` and `localhost` (`TrustedHostMiddleware`, against
+  DNS rebinding), and start, cancel and delete refuse (`403`) a request whose `Origin` is another site, so a page open
+  in the same browser cannot start or delete jobs.
+* The page refuses, before uploading, what the server would refuse after it: a job already running or starting, an
+  end not after the start. The button is disabled while a video uploads.
 
 ### Page
 

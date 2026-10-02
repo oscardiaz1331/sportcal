@@ -2,7 +2,8 @@
 
 Local only (127.0.0.1), one user. Each job runs in its own worker process (`python -m sportcal.product.video`), so a job
 survives the browser tab and the server, and the GPU is free between jobs. All job state lives in the run folders
-(`runs/product/<id>/status.json`, written by the worker); the server keeps nothing in memory but a lock.
+(`runs/product/<id>/status.json`, written by the worker); the server keeps nothing in memory but a lock and the name of
+the job it is starting.
 """
 import asyncio
 import json
@@ -12,10 +13,13 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import psutil
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
+from starlette.middleware import Middleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
@@ -28,12 +32,24 @@ PAGE = Path(__file__).parent / "web" / "index.html"
 VIDEO_TYPES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
 DEVICES = {"cuda:0", "cpu"}
 START_TIMEOUT_S = 60
-# Windows: no console and its own process group, so closing the server's console or Ctrl+C there does not stop a job
-DETACHED = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP) if sys.platform == "win32" else 0
+LOCAL_HOSTS = ["127.0.0.1", "localhost"]
+# Windows: a hidden console of its own and its own process group, so closing the server's console or Ctrl+C there does
+# not stop a job. Not DETACHED_PROCESS: the venv's python.exe is a launcher, and the real interpreter it starts would
+# get a visible console window of its own, whose closing kills the job.
+DETACHED = (subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP) if sys.platform == "win32" else 0
 
 
 def error(message, code=400):
     return JSONResponse({"error": message}, status_code=code)
+
+
+def foreign(request):
+    """The 403 for a request another site's page sent (its Origin is not this server), else None. Checked on what
+    changes state - start, cancel, delete - before anything is read or done."""
+    origin = request.headers.get("origin")
+    if origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS:
+        return error("petición de otro origen", 403)
+    return None
 
 
 def read_status(folder):
@@ -131,6 +147,8 @@ def list_jobs(request):
 
 
 async def create_job(request):
+    if refusal := foreign(request):
+        return refusal
     state = request.app.state
     async with request.form() as form:
         upload, sport, device = form.get("video"), form.get("sport"), form.get("device") or "cuda:0"
@@ -186,7 +204,7 @@ async def create_job(request):
 
 def cancel_job(request):
     folder, err = job_folder(request)
-    if err:
+    if err := foreign(request) or err:
         return err
     if not is_running(read_status(folder)):
         return error("el trabajo no está en marcha", 409)
@@ -196,7 +214,7 @@ def cancel_job(request):
 
 def delete_job(request):
     folder, err = job_folder(request)
-    if err:
+    if err := foreign(request) or err:
         return err
     if folder.name == request.app.state.starting:
         return error("el trabajo está arrancando: espera a que esté en marcha", 409)
@@ -225,7 +243,7 @@ def make_app(jobs=JOBS_DIR, worker=WORKER):
         Route("/api/jobs/{id}/cancel", cancel_job, methods=["POST"]),
         Route("/api/jobs/{id}", delete_job, methods=["DELETE"]),
         Mount("/runs", StaticFiles(directory=jobs)),  # out.mp4 with range requests: the player can seek
-    ])
+    ], middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)])  # no other name for 127.0.0.1
     app.state.jobs, app.state.worker, app.state.lock = jobs, list(worker), asyncio.Lock()
     app.state.starting = None  # the run folder whose worker is being started, if any
     return app

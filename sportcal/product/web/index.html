@@ -131,11 +131,21 @@ async function gpu() {
   $("#gpu").className = busy ? "warn" : "muted";
 }
 
-$("#form").addEventListener("submit", ev => {
+$("#form").addEventListener("submit", async ev => {
   ev.preventDefault();
+  const form = ev.target, go = form.querySelector("button[type=submit]"), bar = $("#upload");
   const start = seconds($("#start").value), end = seconds($("#end").value);
+  // what the server would refuse is refused here, before a whole game is uploaded only to get that answer
   if (Number.isNaN(start) || Number.isNaN(end)) { $("#msg").textContent = "Inicio y fin: [[hh:]mm:]ss"; return; }
-  const data = new FormData(ev.target), bar = $("#upload"), xhr = new XMLHttpRequest();
+  if (end !== null && end <= (start ?? 0)) { $("#msg").textContent = "El fin tiene que ser posterior al inicio"; return; }
+  go.disabled = true;  // a second click would upload the video twice
+  const busy = (await (await fetch("/api/jobs")).json()).some(j => j.state === "running" || j.state === "starting");
+  if (busy) {
+    $("#msg").textContent = "Ya hay un trabajo en marcha: espera a que termine o cancélalo";
+    go.disabled = false;
+    return;
+  }
+  const data = new FormData(form), xhr = new XMLHttpRequest();
   data.set("start_s", start ?? "");
   data.set("end_s", end ?? "");
   xhr.open("POST", "/api/jobs");
@@ -143,12 +153,13 @@ $("#form").addEventListener("submit", ev => {
   xhr.upload.onload = () => { $("#msg").textContent = "arrancando el proceso…"; };
   xhr.onload = () => {
     bar.hidden = true;
+    go.disabled = false;
     let body = {};
     try { body = JSON.parse(xhr.responseText); } catch (e) { /* not JSON: show the status code */ }
     $("#msg").textContent = xhr.status === 201 ? "" : (body.error || `error ${xhr.status}`);
-    if (xhr.status === 201) { ev.target.reset(); refresh(); }
+    if (xhr.status === 201) { form.reset(); refresh(); }
   };
-  xhr.onerror = () => { bar.hidden = true; $("#msg").textContent = "no se pudo subir el vídeo"; };
+  xhr.onerror = () => { bar.hidden = true; go.disabled = false; $("#msg").textContent = "no se pudo subir el vídeo"; };
   $("#msg").textContent = "subiendo…";
   xhr.send(data);
 });
