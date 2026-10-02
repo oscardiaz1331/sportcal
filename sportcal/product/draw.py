@@ -9,21 +9,34 @@ SURFACES = {"ice": ((245, 245, 245), (150, 150, 150)), "grass": ((70, 130, 70), 
 COURT = ((150, 110, 60), (255, 255, 255))
 
 
-def minimap(sport, width_px):
-    """(image, to_px): a blank top-down field `width_px` wide, and the map from world metres (N, 2) to its pixels (N, 2).
-    +y points down the image when `sport.y_down` and up otherwise, so that the minimap looks like the main camera."""
+def minimap(sport, max_w, max_h=None, apron=0.0, upright=False):
+    """(image, to_px): a blank top-down field that fits in `max_w` x `max_h` pixels (as wide as `max_w` when `max_h` is
+    None), and the map from world metres (N, 2) to its pixels (N, 2). The minimap looks like the main camera:
+
+    * lying down (the default), for a camera at the side: +x to the right, +y down the image when `sport.y_down` and up
+      otherwise;
+    * `upright`, for a camera that looks along the field (tennis): the far end, -x, at the top and +y on the left - the
+      naming `core.camera.canonical_mirror` gives an end view.
+
+    `apron`: metres drawn around the field, for a sport played off it (tennis, behind the baselines)."""
     x0, x1, y0, y1 = sport.box
-    m = max(4, round(0.04 * width_px))
-    s = (width_px - 2 * m) / (x1 - x0)
-    height = round((y1 - y0) * s) + 2 * m
+    x0, x1, y0, y1 = x0 - apron, x1 + apron, y0 - apron, y1 + apron
+    across, down = (y1 - y0, x1 - x0) if upright else (x1 - x0, y1 - y0)  # metres along the image's width and height
+    m = max(4, round(0.04 * max_w))
+    s = (max_w - 2 * m) / across
+    if max_h is not None:
+        s = min(s, (max_h - 2 * m) / down)
+    width, height = round(across * s) + 2 * m, round(down * s) + 2 * m
 
     def to_px(world):
         q = np.asarray(world, float).reshape(-1, 2)
+        if upright:
+            return np.c_[m + (y1 - q[:, 1]) * s, m + (q[:, 0] - x0) * s]
         y = q[:, 1] - y0 if sport.y_down else y1 - q[:, 1]
         return np.c_[m + (q[:, 0] - x0) * s, m + y * s]
 
     bg, ink = SURFACES.get(sport.surface, COURT)
-    img = np.full((height, width_px, 3), bg, np.uint8)
+    img = np.full((height, width, 3), bg, np.uint8)
     for _, pl in sport.polylines():
         cv2.polylines(img, [np.round(to_px(pl)).astype(np.int32)], False, ink, 1, cv2.LINE_AA)
     return img, to_px

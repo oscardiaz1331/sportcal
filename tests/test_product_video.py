@@ -115,6 +115,7 @@ def test_only_the_most_confident_ball_of_a_frame_is_kept():
 # ---- the frame loop with stand-in models: no torch, no weights, a second or two
 
 H_TINY = np.array([[5.0, 0, 8], [0, 5.0, 20], [0, 0, 1.0]])  # rink metres -> pixels of a 320x180 frame
+H_COURT = np.array([[5.0, 0, 160], [0, 5.0, 90], [0, 0, 1.0]])  # the same for a field with its origin at the centre
 
 
 def big_video(path, n=12, fps=30.0):
@@ -126,9 +127,9 @@ def big_video(path, n=12, fps=30.0):
     return path
 
 
-def box(x_m, y_m, h=30):
-    """A box whose feet stand on the rink point (x_m, y_m) seen through H_TINY."""
-    x, y = 5 * x_m + 8, 5 * y_m + 20
+def box(x_m, y_m, h=30, H=H_TINY):
+    """A box whose feet stand on the field point (x_m, y_m) seen through H (one of the two above)."""
+    x, y = H[0, 0] * x_m + H[0, 2], H[1, 1] * y_m + H[1, 2]
     return [x - 6, y - h, x + 6, y]
 
 
@@ -148,11 +149,11 @@ class NoFrameCount:
 
 @pytest.fixture
 def stand_ins(monkeypatch):
-    """`process_video` with a scripted detector and a fixed homography in place of the models. The test sets
-    `frames` - the detections of each frame, [(box, confidence, class name)] - and reads `trackers`, the keyword
-    arguments every ByteTrack was built with."""
-    script = types.SimpleNamespace(frames=[], trackers=[])
-    names = {0: "player", 1: "puck"}
+    """`process_video` with a scripted detector and a fixed homography in place of the models, for every product
+    sport. The test sets `frames` - the detections of each frame, [(box, confidence, class name)] - and `H` when the
+    field is centred, and reads `trackers`, the keyword arguments every ByteTrack was built with."""
+    script = types.SimpleNamespace(frames=[], trackers=[], H=H_TINY)
+    names = {0: "player", 1: "puck", 2: "person", 3: "sports ball"}
 
     class Detector:
         def __init__(self, weights):
@@ -174,15 +175,15 @@ def stand_ins(monkeypatch):
             pass
 
         def estimate(self, frame):
-            return Estimate(H_TINY, 1.0, self.name)
+            return Estimate(script.H, 1.0, self.name)
 
     real_tracker = V.ByteTrackTracker
     monkeypatch.setitem(sys.modules, "ultralytics", types.SimpleNamespace(YOLO=Detector))
     monkeypatch.setattr(V.sv.Detections, "from_ultralytics", staticmethod(lambda result: result))
     monkeypatch.setattr(V, "KplineEstimator", Homography)
     monkeypatch.setattr(V, "ByteTrackTracker", lambda **kw: script.trackers.append(kw) or real_tracker(**kw))
-    monkeypatch.setitem(V.SPORTS, "hockey-nhl",
-                        {**V.SPORTS["hockey-nhl"], "kpline": Path(__file__), "detector": Path(__file__)})
+    for sport, row in list(V.SPORTS.items()):
+        monkeypatch.setitem(V.SPORTS, sport, {**row, "kpline": Path(__file__), "detector": Path(__file__)})
     return script
 
 
@@ -214,6 +215,29 @@ def test_a_video_that_does_not_say_its_length_is_read_to_its_end(tmp_path, stand
     # and a stretch past its end is a failure with a message, not a "done" with no video
     assert V.process_video(clip, "hockey-nhl", tmp_path / "late", start_s=5.0, device="cpu") == "failed"
     assert "tramo" in status_of(tmp_path / "late")["error"] and not (tmp_path / "late" / "out.mp4").exists()
+
+
+def test_every_product_sport_is_a_registered_sport_with_a_full_row():
+    from sportcal import sports
+
+    assert set(V.SPORTS) == {"hockey-nhl", "soccer-fifa", "tennis-itf"}
+    keys = set(V.SPORTS["hockey-nhl"])
+    for name, row in V.SPORTS.items():
+        assert sports.get(name).name == name and set(row) == keys, name
+
+
+def test_tennis_keeps_a_player_standing_behind_the_baseline(tmp_path, stand_ins):
+    """Tennis is played from behind the baselines: 3 m off the court is a player, not someone to drop (in hockey or
+    soccer, 3 m outside the field is the bench or the crowd)."""
+    stand_ins.H = H_COURT
+    stand_ins.frames = [[(box(15.0, 0.0, H=H_COURT), 0.9, "person")]] * 6    # the near baseline is at x = 11.885
+    clip = big_video(tmp_path / "v.mp4", 6)
+    assert V.process_video(clip, "tennis-itf", tmp_path / "tennis", device="cpu") == "done"
+    rows = list(csv.DictReader(open(tmp_path / "tennis" / "tracks.csv", encoding="utf-8")))
+    assert len(rows) == 6 and {(r["role"], float(r["x_m"]), float(r["y_m"])) for r in rows} == {("player", 15.0, 0.0)}
+    stand_ins.frames = [[(box(56.0, 0.0, H=H_COURT), 0.9, "person")]] * 6    # soccer: 3.5 m behind the goal line
+    assert V.process_video(clip, "soccer-fifa", tmp_path / "soccer", device="cpu") == "done"
+    assert (tmp_path / "soccer" / "tracks.csv").read_text().splitlines()[1:] == []
 
 
 def test_a_cancel_flag_stops_the_loop(tmp_path, stand_ins):

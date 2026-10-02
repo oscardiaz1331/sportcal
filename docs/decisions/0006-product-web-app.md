@@ -36,11 +36,12 @@ Rejected:
 |---|---|---|---|---|---|---|
 | `hockey-nhl` | A2, `runs/kpline/finetune/best_h.pt` | `runs/hockeyai/yolo26s/weights/best.pt`, fallback `SimulaMet-HOST/HockeyAI` on the Hub | player; goalie and referee in fixed colours | puck | 800 (measured in the old demo) | `hold_frames=15`, `smooth=0.1` (ADR 0003, hockey.md 14i) |
 | `soccer-fifa` | E1 on the refit index, `runs/kpline-soccer-fifa/pretrain-derived-refine/best_h.pt` (since 2026-10-02, soccer.md 25; before: `runs/kpline-soccer/pretrain-derived`) | `yolo26m.pt` (COCO, repo root; ultralytics downloads it by name if missing) | person = player | sports ball | 1280 (not measured) | the same, **not measured on soccer** |
+| `tennis-itf` (since 2026-10-02) | per-sport model, `runs/kpline-tennis-itf/pretrain/best_h.pt` (tennis.md 2) | `yolo26m.pt` (COCO) | person = player | sports ball | 1280 (not measured) | the same, **not measured on tennis** |
 
-* Tennis: its model is scored now (tennis.md 2), but joining is more than the one row this ADR first promised. Players
-  stand metres behind the baselines, outside the 1 m slack `project_to_field` allows and off the minimap; the camera
-  looks along the court, so the minimap should stand upright; there is no tennis video on disk to check the result on
-  (the dataset is single frames), and no hand labels. Open, the owner's call.
+* Tennis took two things beyond its table row, both per sport in `video.SPORTS`: `margin`, the metres around the field
+  in which a detection still counts and that the minimap draws (6.4 m for tennis, the run-back of a professional court:
+  it is played from behind the baselines; 1 m for the others), and `upright`, a minimap that stands on end for a camera
+  that looks along the field.
 * IIHF stays out: A2 predicts the NHL template.
 * Sport auto-detection comes later, as one more value of the `sport` parameter (`auto`).
 * No frame stride (process 1 frame in k), no audio in the output.
@@ -223,6 +224,19 @@ soccer.md 25 (`fresh`: coverage 74% -> 100%, p50 9.1 -> 7.7 px). Through the pro
 centre-circle stretch of the `fresh` frames), GPU, everything else equal: frames with at least one player position
 111 / 250 with the old weights, 250 / 250 with the new ones; where both answer, the projected lines sit on the painted
 ones alike. One clip: a check that the switch does what the lab numbers say, not a measurement.
+
+## Tennis added (2026-10-02)
+
+Checked on `tennis.mp4` (three minutes of a grass-court match from YouTube, `wZnCcqm_g-E` at 1:00:49), the rally at
+45-58 s, GPU: 325 / 325 frames with positions at 7.2 frames/s; the projected lines sit on the painted ones; the server
+and the receiver, both behind their baselines, are on the minimap, the far one at the top. Seen on that clip, not
+measured:
+
+* Every person in the frame gets a box - line judges, the crowd - while only those within the margin reach the minimap
+  and `tracks.csv`; within it, ball kids and the umpire count as players (`ponytail:` in `video.SPORTS`).
+* Teams from jersey colour mean nothing here (both players in white).
+* A ball in the air is projected as if it touched the ground: its minimap position is right only at a bounce.
+* The model's 1.7 px is agreement with the court detector that made its labels; tennis has no hand labels.
 
 ## What would change this
 

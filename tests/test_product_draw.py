@@ -30,6 +30,22 @@ def test_minimap_puts_the_field_corners_on_its_corners_the_way_the_main_camera_s
         assert np.allclose((xb, yb), (w - xa, h - xa), atol=1), sport.name
 
 
+def test_an_upright_minimap_with_an_apron_has_room_behind_the_baselines():
+    """Tennis: the camera looks along the court - the far baseline (-x) at the top, +y on the left - and the players
+    stand metres behind the baselines, which a minimap of the bare court would leave out."""
+    court = get("tennis-itf")
+    x0, x1, y0, y1 = court.box
+    img, to_px = minimap(court, 300, 400, apron=5.0, upright=True)
+    h, w = img.shape[:2]
+    assert w < h <= 400 and w <= 300                                  # stands on end, inside the box it was given
+    far_left, near_right, behind = to_px([(x0, y1), (x1, y0), (x1 + 4.0, 0.0)])
+    assert abs(far_left[0] - far_left[1]) < 1e-6 and far_left[0] > 20  # the apron, the same on every side
+    assert np.allclose(near_right, (w - far_left[0], h - far_left[1]), atol=1)
+    assert near_right[1] < behind[1] < h and abs(behind[0] - w / 2) <= 1   # 4 m behind the near baseline: still on it
+    flat, _ = minimap(court, 300, 400, apron=5.0)
+    assert flat.shape[1] > flat.shape[0]                              # the same court lying down when not upright
+
+
 def test_field_lines_keep_only_what_is_in_front_of_the_camera():
     """A camera that sees the rink up to x = 50 m: the last 11 m lie behind it and would come back mirrored, on the
     wrong side of the image (negative x), if they were drawn."""

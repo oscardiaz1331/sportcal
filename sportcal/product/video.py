@@ -37,7 +37,9 @@ from sportcal.product.pipeline import HomographyPipeline, project_to_field
 JOBS_DIR = RUNS / "product"
 ID_PATTERN = re.compile(r"^\d{8}-\d{6}-[A-Za-z0-9_-]{1,40}\Z")  # \Z, not $: $ would let a trailing newline through
 
-# What differs per sport (ADR 0006, "Scope of v1"). roles: detector class name -> role in the product.
+# What differs per sport (ADR 0006, "Scope of v1"). roles: detector class name -> role in the product. margin: metres
+# around the field in which a detection still counts, and that the minimap draws. upright: the main camera looks along
+# the field, so the minimap stands on end.
 SPORTS = {
     "hockey-nhl": dict(
         label="Hockey (NHL)",
@@ -45,14 +47,24 @@ SPORTS = {
         detector=RUNS / "hockeyai" / "yolo26s" / "weights" / "best.pt",
         detector_hub=("SimulaMet-HOST/HockeyAI", "HockeyAI_model_weight.pt"),
         roles={"player": "player", "goalie": "goalie", "referee": "referee", "puck": "ball"},
-        imgsz=800, hold_frames=15, smooth=0.1),
+        imgsz=800, hold_frames=15, smooth=0.1, margin=1.0, upright=False),
     "soccer-fifa": dict(
         label="Fútbol",
         kpline=RUNS / "kpline-soccer-fifa" / "pretrain-derived-refine" / "best_h.pt",
         detector=ROOT / "yolo26m.pt",  # COCO; ultralytics downloads it by name when missing
         detector_hub=None,
         roles={"person": "player", "sports ball": "ball"},
-        imgsz=1280, hold_frames=15, smooth=0.1),
+        imgsz=1280, hold_frames=15, smooth=0.1, margin=1.0, upright=False),
+    # ponytail: tennis is played from behind the baselines, so its margin is the run-back of a professional court -
+    # and every person standing there (ball kids, line judges, the umpire) counts as a player. Upgrade: a detector, or
+    # a rule, that tells the two players apart
+    "tennis-itf": dict(
+        label="Tenis",
+        kpline=RUNS / "kpline-tennis-itf" / "pretrain" / "best_h.pt",
+        detector=ROOT / "yolo26m.pt",
+        detector_hub=None,
+        roles={"person": "player", "sports ball": "ball"},
+        imgsz=1280, hold_frames=15, smooth=0.1, margin=6.4, upright=True),
 }
 
 
@@ -226,9 +238,8 @@ def process_video(video, sport, out_dir, start_s=0.0, end_s=None, device="cuda:0
         homography = HomographyPipeline([KplineEstimator(cfg["kpline"], sport=sport, device=device)],
                                         hold_frames=cfg["hold_frames"], smooth=cfg["smooth"])
         w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        x0, x1, y0, y1 = field.box
-        # 30% of the frame width, but never taller than 60% of its height (portrait or very wide videos)
-        base, to_px = draw.minimap(field, int(min(0.3 * w, 0.6 * h * (x1 - x0) / (y1 - y0))))
+        # at most 30% of the frame's width and half its height, whatever the field's shape and the video's
+        base, to_px = draw.minimap(field, int(0.3 * w), int(0.5 * h), apron=cfg["margin"], upright=cfg["upright"])
         mh, mw = base.shape[:2]
         down = compute_downscale_factor(max(w, h))
         small = (round(w / down), round(h / down))  # the shot-cut detector only needs a ~256 px frame
@@ -283,7 +294,7 @@ def process_video(video, sport, out_dir, start_s=0.0, end_s=None, device="cuda:0
                     cv2.putText(vis, f"#{tid}", (bx1, max(15, by1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c, 2)
             if est is not None:
                 draw.draw_field(vis, est.H, field)
-                world, inside = project_to_field(est, feet(tracked.xyxy), field)
+                world, inside = project_to_field(est, feet(tracked.xyxy), field, margin=cfg["margin"])
                 rows.writerows(track_rows(idx, fps, shot_id, ids, role, team, world, inside))
                 owners = [(team[i], world[i]) for i in np.flatnonzero(inside)
                           if role[i] == "player" and team[i] is not None]
