@@ -30,6 +30,11 @@ What the code and data already give:
    (b) Model A pretrained on NHL rows only, scored on all 633 IIHF frames: needs one training filter
    (`--templates hockey-nhl`). If (b) is within ~2x of (a), NHL -> IIHF is answered by named channels and E2 goes
    straight to the held-out sport; if not, the conditioned model is also run NHL -> IIHF.
+   **Result (2026-10-02, hockey.md section 16):** (a) 100% coverage, p50 7.5 px; (b) 25-43% coverage, p50 21-37 px
+   gated - no transfer. But the points (b) finds on IIHF are where the markings are (7.9 px, as at home); it finds
+   19% of them, and only 35% on NHL itself. The failure is recognition (614 rows, another broadcast), not rink
+   geometry, so conditioning on the template would not repair it: NHL -> IIHF is dropped as a test of conditioning
+   and E2 goes to the held-out sport, where the training sports have 11k (soccer) and 1.2k (hockey) frames.
 2. **Conditioning: a template raster and a dynamic head** (option C below). The template's painted lines are drawn
    top-down into a fixed canvas (field box fitted, aspect kept, canonical orientation); a small CNN encodes it. A point
    query is the raster feature bilinearly sampled at the point, plus its normalised position; a line query is the
@@ -84,9 +89,9 @@ replacing the raster CNN with a lookup, so B needs no separate design.
 
 ## Action items
 
-1. [ ] Control (a): `train_kpline --sport hockey-iihf --eval runs/kpline/finetune/best_h.pt --split dev --gate`.
-2. [ ] Tennis per-sport model (the upper bound): `train_kpline --sport tennis-itf --phase pretrain --epochs 20`.
-3. [ ] `--templates` filter, control (b) on NHL only, scored on IIHF train + dev.
+1. [x] Control (a): `train_kpline --sport hockey-iihf --eval runs/kpline/finetune/best_h.pt --split dev --gate`.
+2. [x] Tennis per-sport model (the upper bound): test p50 1.7 px, 100% coverage (`tennis.md` section 2).
+3. [x] `--templates` filter, control (b) on NHL only, scored on IIHF train + dev (hockey.md section 16).
 4. [ ] Template raster + dynamic head in `models/`, one test: the raster sample of an element depends only on the
        template, and permuting queries permutes the outputs.
 5. [ ] Multi-sport trainer (sampler, padding, selection on training sports), then the five rows of the table.

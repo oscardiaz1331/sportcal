@@ -851,3 +851,47 @@ while close together without a jump or a turn are invisible to all four signals.
 jump between players closer than that is missed. Frames without H are excluded, so a swap during a refusal or a hold
 shows only if it leaves a jump. The COCO detector also sees the bench, officials and crowd; the rink filter removes
 most, referees remain as players without a team.
+
+## 16. NHL -> IIHF with named channels: the controls of ADR 0005 (2026-10-02)
+
+**Question:** NHL and IIHF share their 56 point names and 9 lines, only the coordinates differ. Does model A trained on
+NHL alone already work on IIHF when the solver is handed the IIHF template - which would make NHL -> IIHF useless as a
+test of a template-conditioned model (ADR 0005)?
+**Method:** (a) the existing weights, which saw IIHF in pretraining, on IIHF `dev`; (b) the model A pretrain recipe (60
+epochs, base keypoints) on the 614 NHL train rows only (`--templates hockey-nhl`, checkpoint chosen on NHL `dev`), scored
+on the 633 IIHF frames it never saw. Px at 1920, percentages of all frames.
+
+| weights | IIHF rows | gate | coverage | p50 | p90 | < 10 px | < 25 px |
+|---|---|---|---|---|---|---|---|
+| (a) A2 (`runs/kpline/finetune`) | dev, 61 | either | 100% | 7.5 | 17.1 | 67% | 97% |
+| (a) NHL + IIHF pretrain (`runs/kpline/pretrain`) | dev, 61 | either | 100% | 8.1 | 17.8 | 59% | 97% |
+| (b) NHL only, best on NHL dev (epoch 29) | dev, 61 | no | 36% | 30.9 | 1193 | 0% | 15% |
+| (b) NHL only, best on NHL dev | dev, 61 | yes | 26% | 20.8 | 103.5 | 0% | 15% |
+| (b) NHL only, best on NHL dev | train, 572 | yes | 25% | 28.2 | 253.3 | 2% | 12% |
+| (b) NHL only, last (epoch 59) | train, 572 | yes | 43% | 37.1 | 141.1 | 2% | 16% |
+
+On NHL `test` (72 frames, gated) the NHL-only weights give coverage 62%, p50 10.2, < 25 px 61%, against 75%, 10.3, 61%
+for the NHL + IIHF pretrain: dropping IIHF costs little at home.
+**Why (b) fails** - the heatmap peaks against the rendered targets, per element:
+
+| weights | frames | points: recall | points: image error p50 | points: > 25 px | false points / frame | line ends: recall |
+|---|---|---|---|---|---|---|
+| NHL only | IIHF, 633 | 19% | 7.9 px | 8% | 0.1 | 51% |
+| NHL only | NHL test, 72 | 35% | 7.5 px | 12% | 0.1 | 41% |
+| NHL + IIHF | IIHF dev, 61 | 95% | 4.6 px | 4% | 0.0 | 85% |
+| NHL + IIHF | NHL test, 72 | 55% | 7.7 px | 15% | 0.1 | 49% |
+
+What the NHL-only model finds on IIHF it puts where the marking is (7.9 px, as on its own league) and it invents
+almost nothing; it does not move points towards an NHL layout. It finds too few of them: 2.6 of 13.8 visible points per
+frame, which leaves the solver without an answer or with a weak one. Its recall is already low at home (35%): 614 NHL
+rows, most of them fitted or auto-labelled, make a weak detector, and the Swedish-league broadcasts are a different look.
+**Decision:** NHL -> IIHF does not transfer with named channels, but the failure is recognition (few rows, another
+broadcast), not rink geometry, so a template-conditioned model trained on the same 614 rows would miss the same
+markings. NHL -> IIHF is dropped as a test of conditioning; ADR 0005 goes to the held-out sport. For the product,
+IIHF needs IIHF frames in training - which model A already has.
+**Caveats:** IIHF `dev` shares its videos with IIHF train (one league), so (a) is optimistic. Appearance and geometry
+are not fully separated: a layout prior could also lower the confidence of a marking found in an unexpected place;
+the reverse run (IIHF only -> NHL) was not made. One run per configuration, 61-72 frame sets.
+
+    python -m sportcal.lab.common.train_kpline --sport hockey-nhl --phase pretrain --templates hockey-nhl --tag=-nhlonly
+    python -m sportcal.lab.common.train_kpline --sport hockey-iihf --eval runs/kpline-hockey-nhl/pretrain-nhlonly/best_h.pt --split train --gate

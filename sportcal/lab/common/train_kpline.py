@@ -11,7 +11,7 @@ pretrain on every train label of the index, then (hockey) fine-tune on the hand 
     python -m sportcal.lab.common.train_kpline --sport hockey-nhl --eval runs/kpline/finetune/best_h.pt --split test [--gate]
 
 Runs go to runs/kpline-<sport>/<phase>[-derived][tag]. An index may hold several templates (hockey: NHL and IIHF): all
-of its train rows are used, dev and scoring use the rows of `--sport` only.
+of its train rows are used (`--templates` keeps some of them), dev and scoring use the rows of `--sport` only.
 Targets are rendered from H every time, never stored: a flip or a camera turn (`core.camera.ptz_warp`) changes H,
 `Sport.canonicalize` renames the points, and no remapping table exists to go wrong. Checkpoints are chosen by the median
 homography error on `dev`, not by the loss (hockey.md section 2: a good pose loss can mean useless homographies). The
@@ -156,6 +156,8 @@ def report(rows, errs, split):
 
 def train(args, rows, device):
     tr = select(rows, args.phase, args.sport)
+    if args.templates:
+        tr = [r for r in tr if r["template"] in args.templates]
     sport = sports.get(args.sport)
     dev = [r for r in rows if r["split"] == "dev" and r["template"] == args.sport]
     kp = keypoints(args.keypoints, tr + dev)
@@ -235,6 +237,8 @@ def main():
     ap.add_argument("--split", default="test", help="with --eval: test | test_leaky | dev | fresh")
     ap.add_argument("--keypoints", choices=KEYPOINT_SETS, default="base",
                     help="keypoint set to train (runs go to <phase>-derived); --eval reads it from the weights")
+    ap.add_argument("--templates", nargs="+", choices=sports.names(),
+                    help="train on the rows of these templates only (default: every template of the index)")
     ap.add_argument("--tag", default="", help="suffix of the run folder, e.g. --tag=-cont (with =) to continue a run without overwriting it")
     ap.add_argument("--gate", action="store_true", help="with --eval: refuse the H no real camera gives (hockey.md 14d)")
     args = ap.parse_args()
