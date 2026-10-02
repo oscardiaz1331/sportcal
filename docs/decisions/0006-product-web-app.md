@@ -1,7 +1,7 @@
 # ADR 0006 - The product as a local web app
 
-Status: proposed, 2026-09-27. Deciders: the owner. Design agreed in conversation the same day; the implementation plan
-goes to `docs/superpowers/plans/2026-09-27-product-web-app.md`.
+Status: accepted 2026-09-27, implemented and verified end to end 2026-10-02. Deciders: the owner. Implementation plan:
+`docs/superpowers/plans/2026-09-27-product-web-app.md`.
 
 ## Context
 
@@ -93,9 +93,12 @@ never reused (a reused run folder once overwrote a best checkpoint). `<label>` i
 | `worker.log` | worker (stdout, stderr) | progress and tracebacks |
 | `cancel` | server | flag file; the worker checks it every frame and stops cleanly |
 
-`interrupted` is never written: the server derives it when `status.json` says `running` but no process with that `pid`
-and start time exists (killed, crashed, PC restarted), and for a folder with no `status.json` at all. Liveness uses
-`psutil`: on Windows `os.kill(pid, 0)` kills the process instead of probing it.
+Two states are never written; the server derives them. `interrupted`: `status.json` says `running` but no process with
+that `pid` and start time exists (killed, crashed, PC restarted), or the folder has no readable `status.json` (a power
+cut once left one as NUL bytes). `starting`: the folder the server has just created, for the seconds until its worker
+writes its first status; the server remembers its name in memory while `POST /api/jobs` waits, the page shows it as
+"arrancando" with no buttons, and it cannot be deleted. Liveness uses `psutil`: on Windows `os.kill(pid, 0)` kills the
+process instead of probing it.
 
 ### Server routes
 
@@ -105,7 +108,7 @@ and start time exists (killed, crashed, PC restarted), and for a folder with no 
 | `GET /api/sports` | the sports of the table in `video.py` (the single source) |
 | `GET /api/gpu` | GPU memory in use, from `nvidia-smi` (no torch in the server); `null` without it |
 | `POST /api/jobs` | multipart `video`, `sport`, `start_s`, `end_s`, `device` -> validate, create the folder, save the upload, launch the worker, wait until its first `status.json` exists, `201 {id}`. `409` while another job runs. If the worker exits, or writes no status within 60 s: `500` with the tail of `worker.log`, and the folder stays for inspection (listed as `interrupted`) |
-| `GET /api/jobs` | every run folder, newest first, from its `status.json` (derived `interrupted` included) |
+| `GET /api/jobs` | every run folder, newest first, from its `status.json` (derived `starting` and `interrupted` included) |
 | `POST /api/jobs/{id}/cancel` | create the `cancel` flag; `409` if the job is not running |
 | `DELETE /api/jobs/{id}` | `409` if running; otherwise rename the folder, then delete it. On Windows the rename fails while any file inside is open (the video in the player), so the job is either deleted whole or not at all ("archivo en uso") |
 | `/runs/...` | `StaticFiles` over `runs/product/`: `out.mp4` with range requests (seeking), `tracks.csv`, `worker.log` |
@@ -177,8 +180,26 @@ Each check is broken once on purpose to see it go red.
 * Soccer: the smoothing, `imgsz` 1280 and team colours are unmeasured there; COCO `person` does not tell referees or
   goalkeepers apart; E1 misses centre-circle views (soccer.md 20-22), which become refusals and holds.
 * A wrong homography that a real camera could produce still passes the gate (ADR 0003).
-* Speed: the homography model alone takes 0.85 s per frame on CPU (ADR 0003); GPU speed is not timed. A 2-hour game is
-  216,000 frames.
+* Speed, end to end (detector + homography model + drawing + encoding), 1080p: 5.7 frames/s for hockey and 6.5 for
+  soccer on the GPU (one 10 s clip each, 2026-10-02); about 0.9 frames/s on CPU (2026-09-27, with a training running).
+  A 2-hour game at 60 fps is 432,000 frames: about 21 hours on the GPU. A frame stride is the first thing to add for
+  whole games.
+
+## Verified end to end (2026-10-02)
+
+Through the page in a browser, GPU: `nhl11.mp4` 1:00-1:10 (600 frames) and `soccer.mp4` 0:30-0:40 (250 frames) both
+end as `done`; the video plays and seeks (range requests) and is not recreated by the polling; closing and reopening
+the tab keeps the job; cancel stops a job at its 37th frame and the partial video plays; delete removes the folder.
+The projected lines sit on the painted ones in both sports.
+
+Seen on those two clips, not measured:
+
+* Soccer: every player of the clip is in the left half (x from -48 to -8 m), the half `project_to_field` dropped before
+  its fix. Team colours mix the two teams, and the ball trail jumps between false `sports ball` detections.
+* Hockey: the detector calls some skaters referees; the browser's video controls cover part of the minimap while the
+  video is paused.
+* The first run of this check (2026-09-27, CPU job next to a GPU training) ended with the PC going down hard; the
+  training died with it. Cause unknown (soccer.md 24 suspects the hardware): do not run a job next to a training.
 
 ## What would change this
 

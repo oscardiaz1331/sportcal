@@ -24,7 +24,8 @@ sportcal/
     <sport>/           what only that sport has: its data sources and H index, labellers, its experiments
     <sport>/archive/   frozen dead ends and superseded tools (unmaintained)
     common/            what every sport uses (the keypoint + line trainer `train_kpline`) and the Streamlit apps
-  product/   the deployed pipeline: Estimator chain, the sport-agnostic estimators, per-sport compositions
+  product/   the deployed pipeline: Estimator chain, the sport-agnostic estimators, per-sport compositions,
+             the video worker and the local web app (ADR 0006)
 tests/       fast, deterministic, no GPU / weights / datasets
 docs/        architecture, decisions (ADRs), experiment write-ups, porting status
 configs/     training configs (yaml), per sport
@@ -82,9 +83,10 @@ code on purpose once and check it goes red (the Hartley-normalisation test was a
 ## Running
 
 ```bash
-uv pip install --python venv/Scripts/python.exe -e ".[dev]"     # once (add [train] / [lab] as needed)
+uv pip install --python venv/Scripts/python.exe -e ".[dev]"     # once (add [train] / [lab] / [product] as needed)
 venv/Scripts/python.exe -m pytest                              # the fast tests, ~10 s
 venv/Scripts/python.exe -m pytest -m ""                        # everything, including slow ones needing weights
+venv/Scripts/python.exe -m sportcal.product.server             # the product: http://127.0.0.1:8000
 venv/Scripts/python.exe -m sportcal.lab.hockey.seg_to_homography --selftest
 ```
 

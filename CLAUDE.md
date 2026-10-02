@@ -54,7 +54,7 @@ the minimum code that works.
 | Need | Look at |
 |---|---|
 | Layers, dependency rules, adding a sport / experiment / product method | `docs/architecture.md` |
-| Why things are the way they are | `docs/decisions/` (ADRs; 0003 product composition, 0004 network output + shared solver, 0005 template-conditioned model) |
+| Why things are the way they are | `docs/decisions/` (ADRs; 0003 product composition, 0004 network output + shared solver, 0005 template-conditioned model, 0006 product web app) |
 | What was measured, and the dead ends | `docs/experiments/hockey.md` (Spanish long-form `hockey.es.md`), `soccer.md`, `tennis.md` |
 | Code | `sportcal/{core,sports,models,lab,product}`; tests in `tests/` |
 | Porting ledger (old -> new paths) | `docs/porting-status.md` |
@@ -101,6 +101,7 @@ the minimum code that works.
 ```bash
 venv/Scripts/python.exe -m pytest                                                  # fast suite
 python -m sportcal.lab.common.train_kpline --sport hockey-nhl --eval runs/kpline/finetune/best_h.pt --split fresh --gate
+python -m sportcal.product.server                                                  # web app: http://127.0.0.1:8000 (ADR 0006)
 python -m sportcal.product.video nhl11.mp4 --sport hockey-nhl --end 20 [--device cpu]  # one video -> runs/product/<run>/
 python -m sportcal.lab.soccer.soccernet_h --root datasets/calibration-2023          # soccer H index
 python -m sportcal.lab.tennis.tennis_h                                             # tennis H index

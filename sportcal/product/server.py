@@ -71,10 +71,11 @@ def running(jobs):
     return next((f.name for f in folders(jobs) if is_running(read_status(f))), None)
 
 
-def job(folder):
-    """What the page shows of a run folder. `interrupted` is derived here, never written: a `running` status whose
-    worker is gone, or no status at all."""
-    st = read_status(folder) or {"state": "interrupted"}
+def job(folder, starting=None):
+    """What the page shows of a run folder. Two states are derived here, never written: `starting`, for the folder
+    named `starting` while its worker has not written a status yet, and `interrupted`, for a `running` status whose
+    worker is gone or a folder with no readable status."""
+    st = read_status(folder) or {"state": "starting" if folder.name == starting else "interrupted"}
     if st.get("state") == "running" and not alive(st):
         st["state"] = "interrupted"
     st["id"] = folder.name
@@ -125,7 +126,8 @@ def gpu(request):
 
 
 def list_jobs(request):
-    return JSONResponse([job(f) for f in folders(request.app.state.jobs)])
+    state = request.app.state
+    return JSONResponse([job(f, state.starting) for f in folders(state.jobs)])
 
 
 async def create_job(request):
@@ -153,28 +155,32 @@ async def create_job(request):
             if busy := running(state.jobs):
                 return error(f"ya hay un trabajo en marcha: {busy}", 409)
             folder = new_run_folder(state.jobs, upload.filename)
-            video = folder / f"input{ext}"
+            state.starting = folder.name  # listed as starting, not interrupted, until the worker's first status
             try:
-                with open(video, "wb") as fh:
-                    while chunk := await upload.read(1 << 20):
-                        fh.write(chunk)
-            except OSError as e:  # disk full...: no half-made job left behind
-                shutil.rmtree(folder, ignore_errors=True)
-                return error(f"no se pudo guardar el vídeo: {e}", 507)
-            # "--name=": a file name that starts with "-" would otherwise be read as an option
-            cmd = [*state.worker, str(video), "--sport", sport, "--out", str(folder), "--start", str(start_s),
-                   "--device", device, f"--name={upload.filename}"]
-            if end_s is not None:
-                cmd.append(f"--end={end_s}")
-            with open(folder / "worker.log", "w", encoding="utf-8") as log:
-                proc = subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
-                                        stdin=subprocess.DEVNULL, creationflags=DETACHED)
-            deadline = time.monotonic() + START_TIMEOUT_S
-            while not (folder / "status.json").exists():
-                if proc.poll() is not None or time.monotonic() > deadline:
-                    tail = (folder / "worker.log").read_text(encoding="utf-8", errors="replace")[-2000:]
-                    return error(f"el proceso no arrancó:\n{tail}", 500)
-                await asyncio.sleep(0.1)
+                video = folder / f"input{ext}"
+                try:
+                    with open(video, "wb") as fh:
+                        while chunk := await upload.read(1 << 20):
+                            fh.write(chunk)
+                except OSError as e:  # disk full...: no half-made job left behind
+                    shutil.rmtree(folder, ignore_errors=True)
+                    return error(f"no se pudo guardar el vídeo: {e}", 507)
+                # "--name=": a file name that starts with "-" would otherwise be read as an option
+                cmd = [*state.worker, str(video), "--sport", sport, "--out", str(folder), "--start", str(start_s),
+                       "--device", device, f"--name={upload.filename}"]
+                if end_s is not None:
+                    cmd.append(f"--end={end_s}")
+                with open(folder / "worker.log", "w", encoding="utf-8") as log:
+                    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
+                                            stdin=subprocess.DEVNULL, creationflags=DETACHED)
+                deadline = time.monotonic() + START_TIMEOUT_S
+                while not (folder / "status.json").exists():
+                    if proc.poll() is not None or time.monotonic() > deadline:
+                        tail = (folder / "worker.log").read_text(encoding="utf-8", errors="replace")[-2000:]
+                        return error(f"el proceso no arrancó:\n{tail}", 500)
+                    await asyncio.sleep(0.1)
+            finally:
+                state.starting = None
     return JSONResponse({"id": folder.name}, status_code=201)
 
 
@@ -192,6 +198,8 @@ def delete_job(request):
     folder, err = job_folder(request)
     if err:
         return err
+    if folder.name == request.app.state.starting:
+        return error("el trabajo está arrancando: espera a que esté en marcha", 409)
     if is_running(read_status(folder)):
         return error("el trabajo está en marcha: cancélalo antes", 409)
     trash = folder.with_name(f".deleting-{folder.name}")
@@ -219,6 +227,7 @@ def make_app(jobs=JOBS_DIR, worker=WORKER):
         Mount("/runs", StaticFiles(directory=jobs)),  # out.mp4 with range requests: the player can seek
     ])
     app.state.jobs, app.state.worker, app.state.lock = jobs, list(worker), asyncio.Lock()
+    app.state.starting = None  # the run folder whose worker is being started, if any
     return app
 
 

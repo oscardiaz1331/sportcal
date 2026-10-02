@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sportcal - minimapa</title>
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; max-width: 960px; margin: 24px auto; padding: 0 16px; color: #222; background: #fff; }
+  form, .job { border: 1px solid #ccc; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+  label { display: inline-block; margin: 4px 16px 4px 0; }
+  input.time { width: 6em; }
+  progress { width: 100%; }
+  .muted { color: #666; font-size: 13px; }
+  .warn { color: #b00; font-size: 13px; }
+  .job h3 { margin: 0 0 4px; font-size: 16px; overflow-wrap: anywhere; }
+  .job video { width: 100%; margin-top: 8px; background: #000; }
+  .job pre { background: #f6f6f6; padding: 8px; overflow-x: auto; font-size: 12px; }
+  .job button, .job a { margin: 6px 12px 0 0; }
+</style>
+</head>
+<body>
+<h1>Minimapa desde vídeo</h1>
+<form id="form">
+  <label>Vídeo <input type="file" name="video" accept="video/*" required></label><br>
+  <label>Deporte <select name="sport" id="sport"></select></label>
+  <label>Inicio <input class="time" id="start" placeholder="0:00"></label>
+  <label>Fin <input class="time" id="end" placeholder="final"></label>
+  <label>Dispositivo <select name="device"><option value="cuda:0">GPU</option><option value="cpu">CPU</option></select></label>
+  <span id="gpu" class="muted"></span><br>
+  <button type="submit">Procesar</button> <span id="msg"></span>
+  <progress id="upload" hidden></progress>
+</form>
+<div id="jobs"></div>
+<script>
+const STATES = {starting: "arrancando", running: "en marcha", done: "terminado", failed: "falló", cancelled: "cancelado",
+                interrupted: "interrumpido"};
+const $ = sel => document.querySelector(sel);
+const cards = new Map();  // job id -> its card, updated in place: a <video> that is playing is never recreated
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text) e.textContent = text;  // never innerHTML: names come from the uploaded file
+  if (cls) e.className = cls;
+  return e;
+}
+
+function button(text, onclick) {
+  const b = el("button", text);
+  b.type = "button";
+  b.onclick = onclick;
+  return b;
+}
+
+function seconds(text) {  // "[[hh:]mm:]ss" -> seconds; "" -> null; NaN when malformed
+  text = text.trim();
+  if (!text) return null;
+  if (!/^\d+(:\d{1,2}){0,2}(\.\d+)?$/.test(text)) return NaN;
+  return text.split(":").reduce((total, part) => total * 60 + Number(part), 0);
+}
+
+function duration(s) {
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h} h ${m} min` : m ? `${m} min` : `${s} s`;
+}
+
+async function call(method, url) {
+  const r = await fetch(url, {method});
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || `error ${r.status}`);
+  refresh();
+}
+
+function render(job) {
+  let c = cards.get(job.id);
+  if (!c) {
+    c = {root: el("div", "", "job"), title: el("h3"), info: el("div", "", "muted"), bar: el("progress"),
+         actions: el("div"), extra: el("div"), key: null};
+    c.root.append(c.title, c.info, c.bar, c.actions, c.extra);
+    cards.set(job.id, c);
+  }
+  const running = job.state === "running";
+  c.title.textContent = job.video_name || job.id;
+  const parts = [job.sport || "", STATES[job.state] || job.state];
+  if (job.frame) parts.push(job.total ? `${job.frame} / ${job.total} frames` : `${job.frame} frames`);
+  if (running && job.speed) parts.push(`${job.speed} frames/s`);
+  if (running && job.speed && job.total) parts.push(`quedan ${duration((job.total - job.frame) / job.speed)}`);
+  if (job.error) parts.push(job.error);
+  c.info.textContent = parts.filter(Boolean).join(" · ");
+  c.bar.hidden = !(running && job.total);
+  if (job.total) { c.bar.max = job.total; c.bar.value = job.frame; }
+  const key = `${job.state}|${job.files.join()}`;  // buttons, links and player change only with these
+  if (c.key === key) return;
+  c.key = key;
+  c.actions.replaceChildren();
+  c.extra.replaceChildren();
+  if (running) c.actions.append(button("Cancelar", () => call("POST", `/api/jobs/${job.id}/cancel`)));
+  else if (job.state !== "starting")  // a starting job has no worker to cancel yet and is not safe to delete
+    c.actions.append(button("Borrar", () => confirm(`¿Borrar «${job.video_name || job.id}» y todos sus archivos?`)
+                                            && call("DELETE", `/api/jobs/${job.id}`)));
+  for (const f of job.files) {
+    const a = el("a", f);
+    a.href = `/runs/${job.id}/${f}`;
+    a.download = "";
+    c.actions.append(a);
+  }
+  if (!running && job.files.includes("out.mp4")) {
+    const v = el("video");
+    v.controls = true;
+    v.preload = "metadata";
+    v.src = `/runs/${job.id}/out.mp4`;
+    c.extra.append(v);
+  }
+  if (job.log_tail) c.extra.append(el("pre", job.log_tail.join("\n")));
+}
+
+async function refresh() {
+  const jobs = await (await fetch("/api/jobs")).json();
+  const ids = new Set(jobs.map(j => j.id));
+  for (const [id, c] of cards) if (!ids.has(id)) { c.root.remove(); cards.delete(id); }
+  for (const job of [...jobs].reverse()) {  // oldest first, each new card on top: existing cards never move
+    const isNew = !cards.has(job.id);
+    render(job);
+    if (isNew) $("#jobs").prepend(cards.get(job.id).root);
+  }
+}
+
+async function gpu() {
+  const {used_mib} = await (await fetch("/api/gpu")).json();
+  const busy = used_mib > 1024;
+  $("#gpu").textContent = used_mib == null ? "" : `GPU: ${used_mib} MiB en uso${busy ? " — ¿hay un entrenamiento?" : ""}`;
+  $("#gpu").className = busy ? "warn" : "muted";
+}
+
+$("#form").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const start = seconds($("#start").value), end = seconds($("#end").value);
+  if (Number.isNaN(start) || Number.isNaN(end)) { $("#msg").textContent = "Inicio y fin: [[hh:]mm:]ss"; return; }
+  const data = new FormData(ev.target), bar = $("#upload"), xhr = new XMLHttpRequest();
+  data.set("start_s", start ?? "");
+  data.set("end_s", end ?? "");
+  xhr.open("POST", "/api/jobs");
+  xhr.upload.onprogress = e => { bar.hidden = false; bar.max = e.total; bar.value = e.loaded; };
+  xhr.upload.onload = () => { $("#msg").textContent = "arrancando el proceso…"; };
+  xhr.onload = () => {
+    bar.hidden = true;
+    let body = {};
+    try { body = JSON.parse(xhr.responseText); } catch (e) { /* not JSON: show the status code */ }
+    $("#msg").textContent = xhr.status === 201 ? "" : (body.error || `error ${xhr.status}`);
+    if (xhr.status === 201) { ev.target.reset(); refresh(); }
+  };
+  xhr.onerror = () => { bar.hidden = true; $("#msg").textContent = "no se pudo subir el vídeo"; };
+  $("#msg").textContent = "subiendo…";
+  xhr.send(data);
+});
+
+fetch("/api/sports").then(r => r.json()).then(list => {
+  for (const s of list) { const o = el("option", s.label); o.value = s.id; $("#sport").append(o); }
+});
+refresh(); setInterval(refresh, 2000);
+gpu(); setInterval(gpu, 5000);
+</script>
+</body>
+</html>

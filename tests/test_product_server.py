@@ -140,7 +140,32 @@ def test_a_running_status_without_its_worker_lists_as_interrupted(client):
     assert post(client).status_code == 201                          # a dead job does not hold the lock
 
 
+def test_a_status_file_of_nul_bytes_lists_as_interrupted(client):
+    """What a power cut left behind once: the file is there, 277 NUL bytes long."""
+    folder = client.jobs / "20260927-191854-nhl11"
+    folder.mkdir()
+    (folder / "status.json").write_bytes(b"\0" * 277)
+    assert client.get("/api/jobs").json()[0]["state"] == "interrupted"
+    assert client.delete(f"/api/jobs/{folder.name}").status_code == 200
+
+
+def test_a_job_whose_worker_is_starting_lists_as_starting_and_cannot_be_deleted(client):
+    """Between the folder's creation and the worker's first status the job is starting, not interrupted."""
+    folder = client.jobs / "20260927-120000-starting"
+    folder.mkdir()
+    client.app.state.starting = folder.name
+    assert client.get("/api/jobs").json()[0]["state"] == "starting"
+    assert client.delete(f"/api/jobs/{folder.name}").status_code == 409
+    client.app.state.starting = None
+    assert client.get("/api/jobs").json()[0]["state"] == "interrupted"
+
+
 def test_the_server_does_not_load_torch():
     """Models load in the worker only: the server stays light and never holds GPU memory."""
     code = "import sys, sportcal.product.server; assert 'torch' not in sys.modules, 'the server imported torch'"
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_the_page_is_served(client):
+    r = client.get("/")
+    assert r.status_code == 200 and 'id="form"' in r.text and "/api/jobs" in r.text

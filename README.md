@@ -40,6 +40,9 @@ Whole video with detection, tracking, the field lines drawn from the estimated H
 soccer (writes `out.mp4`, `tracks.csv` and `status.json` into a new `runs/product/<run>/`, ADR 0006):
 `python -m sportcal.product.video nhl11.mp4 --sport hockey-nhl [--start S] [--end S] [--device cpu]`.
 
+The same from the browser - upload a video, pick the sport, follow the job, watch and download the result:
+`python -m sportcal.product.server`, then open http://127.0.0.1:8000 (local only; ADR 0006).
+
 ## Where to read next
 
 * [docs/architecture.md](docs/architecture.md) - layers, dependency rules, how to add a sport / experiment / product method
