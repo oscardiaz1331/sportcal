@@ -70,16 +70,19 @@ built while a training runs. The server never imports torch; the models load onl
 2. **Homography**: `HomographyPipeline([KplineEstimator])` with the sport's smoothing. No YOLO-keypoint fallback: a
    refusal covered by the hold is better than an answer ~100 px off (ADR 0003).
 3. **Detection**: the sport's YOLO26 at `conf=0.25` and its `imgsz`, then ByteTrack (`trackers`) for the ids.
-4. **Team**: `core.teams`; two teams fitted on the first 300 jerseys, kept for the whole video (not reset at cuts).
-   Players without a team yet, or with too little jersey colour, are drawn as "no team".
-5. **Position**: feet (bottom centre of the box) to metres with `project_to_field`; points more than 1 m outside the
-   field are dropped.
+4. **Position**: feet (bottom centre of the box) to metres with `project_to_field`. Only what lands on the field or
+   within the sport's margin (1 m; 6.4 m for tennis) counts: it is boxed, given a team, put on the minimap and logged.
+   The bench, the crowd and the officials at the back wall are detected too and ignored; with no homography nobody can
+   be placed on the field, so nothing is drawn.
+5. **Team**: `core.teams`; two teams fitted on the first 300 jerseys seen on the field, kept for the whole video (not
+   reset at cuts). Players without a team yet, or with too little jersey colour, are drawn as "no team".
 6. **Ball**: the most confident ball detection of the frame only (a frame holds one ball); a trail of its last 25
    positions, each segment coloured by the team of the nearest player within 3 m; the ball itself ringed in dark, so
    that a white puck shows on ice.
 7. **Output frame**: boxes and ids in team colours, the projected field lines, a label with `Estimate.method` (e.g.
-   `kpline+klt`, `kpline+klt+hold`) or `sin calibrar`, and the minimap in the bottom-left corner, scaled to 30% of the
-   frame width whatever the field size (at the old demo's 9 px/m a soccer minimap would be 945 px wide). H.264 through PyAV
+   `kpline+klt`, `kpline+klt+hold`) or `sin calibrar`, and the minimap in the bottom-left corner, at most 30% of the
+   frame's width and half its height whatever the field size (at the old demo's 9 px/m a soccer minimap would be 945
+   px wide), with the sport's margin drawn around the field and standing on end for tennis. H.264 through PyAV
    (`yuv420p`, odd frame sizes padded by 1 px).
 
 Dropped from the old demo: the HSV "main camera" label and its `hsv_scan.csv`, the writer thread.
@@ -232,9 +235,10 @@ Checked on `tennis.mp4` (three minutes of a grass-court match from YouTube, `wZn
 and the receiver, both behind their baselines, are on the minimap, the far one at the top. Seen on that clip, not
 measured:
 
-* Every person in the frame gets a box - line judges, the crowd - while only those within the margin reach the minimap
-  and `tracks.csv`; within it, ball kids and the umpire count as players (`ponytail:` in `video.SPORTS`).
-* Teams from jersey colour mean nothing here (both players in white).
+* Every person in the frame got a box - line judges, the crowd. Since the same day only what stands on the field or
+  within its margin is boxed (step 4 above): on this rally the two players and the umpire. Within the margin, ball kids
+  and the umpire still count as players (`ponytail:` in `video.SPORTS`).
+* Teams from jersey colour mean little here: both players in white end up in one team, the umpire in the other.
 * A ball in the air is projected as if it touched the ground: its minimap position is right only at a bounce.
 * The model's 1.7 px is agreement with the court detector that made its labels; tennis has no hand labels.
 

@@ -91,6 +91,9 @@ the minimum code that works.
     `fresh` labels (`tennis.md`).
   * The PC has reset under combined CPU + GPU load and once fed corrupted batches (soccer.md 24): one heavy job at a
     time while a training runs.
+  * Product (ADR 0006): a local web app over one worker per video, for `hockey-nhl`, `soccer-fifa` and `tennis-itf`
+    with the three models above (table `product.video.SPORTS`). Only detections on the field or within the sport's
+    margin count; a product job is a heavy job too.
 * Keypoint + line model commands: `python -m sportcal.lab.common.train_kpline --sport <hockey-nhl|soccer-fifa|tennis-itf>`;
   new runs go to `runs/kpline-<sport>/`; the index is `datasets/<family>_h.jsonl`.
 * Splits: `fresh` = hand labels of games nothing was tuned on - never train on it or pick thresholds with it.
