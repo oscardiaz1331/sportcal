@@ -70,7 +70,9 @@ built while a training runs. The server never imports torch; the models load onl
    Players without a team yet, or with too little jersey colour, are drawn as "no team".
 5. **Position**: feet (bottom centre of the box) to metres with `project_to_field`; points more than 1 m outside the
    field are dropped.
-6. **Ball**: a trail of the last 25 positions, each segment coloured by the team of the nearest player within 3 m.
+6. **Ball**: the most confident ball detection of the frame only (a frame holds one ball); a trail of its last 25
+   positions, each segment coloured by the team of the nearest player within 3 m; the ball itself ringed in dark, so
+   that a white puck shows on ice.
 7. **Output frame**: boxes and ids in team colours, the projected field lines, a label with `Estimate.method` (e.g.
    `kpline+klt`, `kpline+klt+hold`) or `sin calibrar`, and the minimap in the bottom-left corner, scaled to 30% of the
    frame width whatever the field size (at the old demo's 9 px/m a soccer minimap would be 945 px wide). H.264 through PyAV
@@ -107,10 +109,10 @@ process instead of probing it.
 | `GET /` | the page |
 | `GET /api/sports` | the sports of the table in `video.py` (the single source) |
 | `GET /api/gpu` | GPU memory in use, from `nvidia-smi` (no torch in the server); `null` without it |
-| `POST /api/jobs` | multipart `video`, `sport`, `start_s`, `end_s`, `device` -> validate, create the folder, save the upload, launch the worker, wait until its first `status.json` exists, `201 {id}`. `409` while another job runs. If the worker exits, or writes no status within 60 s: `500` with the tail of `worker.log`, and the folder stays for inspection (listed as `interrupted`) |
+| `POST /api/jobs` | multipart `video`, `sport`, `start_s`, `end_s`, `device` -> validate, create the folder, save the upload, launch the worker, wait until its first `status.json` exists, `201 {id}`. `409` while another job runs. If the worker exits, or writes no status within 60 s: it is stopped, `500` with the tail of `worker.log`, and the folder stays for inspection (listed as `interrupted`) |
 | `GET /api/jobs` | every run folder, newest first, from its `status.json` (derived `starting` and `interrupted` included) |
 | `POST /api/jobs/{id}/cancel` | create the `cancel` flag; `409` if the job is not running |
-| `DELETE /api/jobs/{id}` | `409` if running; otherwise rename the folder, then delete it. On Windows the rename fails while any file inside is open (the video in the player), so the job is either deleted whole or not at all ("archivo en uso") |
+| `DELETE /api/jobs/{id}` | `409` if running; otherwise rename the folder, then delete it. On Windows the rename fails while any file inside is open (the video in the player), so the job is either deleted whole or not at all ("archivo en uso"). What a failed removal leaves (`.deleting-<id>`) is swept when the server starts |
 | `/runs/...` | `StaticFiles` over `runs/product/`: `out.mp4` with range requests (seeking), `tracks.csv`, `worker.log` |
 
 * **One job at a time**: an `asyncio.Lock` covers "check that nothing runs, create the folder, launch, wait for the
@@ -137,7 +139,10 @@ process instead of probing it.
   DNS rebinding), and start, cancel and delete refuse (`403`) a request whose `Origin` is another site, so a page open
   in the same browser cannot start or delete jobs.
 * The page refuses, before uploading, what the server would refuse after it: a job already running or starting, an
-  end not after the start. The button is disabled while a video uploads.
+  end not after the start. The button is disabled while a video uploads. With more than ~1 GB of GPU memory in use
+  it asks before submitting, whatever the device: a job next to a training took the PC down once.
+* A stretch with no frame in it (a start past the end of a video that does not say its length) is `failed` with a
+  message, not `done` with no video; a negative start is refused.
 
 ### Page
 

@@ -36,6 +36,7 @@ const STATES = {starting: "arrancando", running: "en marcha", done: "terminado",
                 interrupted: "interrumpido"};
 const $ = sel => document.querySelector(sel);
 const cards = new Map();  // job id -> its card, updated in place: a <video> that is playing is never recreated
+let gpuBusy = false;      // more than ~1 GB of GPU memory in use: most likely a training
 
 function el(tag, text, cls) {
   const e = document.createElement(tag);
@@ -103,7 +104,8 @@ function render(job) {
     a.download = "";
     c.actions.append(a);
   }
-  if (!running && job.files.includes("out.mp4")) {
+  // no player for an interrupted job: its out.mp4 was never closed and does not open
+  if (!running && job.state !== "interrupted" && job.files.includes("out.mp4")) {
     const v = el("video");
     v.controls = true;
     v.preload = "metadata";
@@ -126,7 +128,7 @@ async function refresh() {
 
 async function gpu() {
   const {used_mib} = await (await fetch("/api/gpu")).json();
-  const busy = used_mib > 1024;
+  const busy = gpuBusy = used_mib > 1024;
   $("#gpu").textContent = used_mib == null ? "" : `GPU: ${used_mib} MiB en uso${busy ? " — ¿hay un entrenamiento?" : ""}`;
   $("#gpu").className = busy ? "warn" : "muted";
 }
@@ -142,6 +144,13 @@ $("#form").addEventListener("submit", async ev => {
   const busy = (await (await fetch("/api/jobs")).json()).some(j => j.state === "running" || j.state === "starting");
   if (busy) {
     $("#msg").textContent = "Ya hay un trabajo en marcha: espera a que termine o cancélalo";
+    go.disabled = false;
+    return;
+  }
+  // a job next to a training took the PC down once (ADR 0006), whatever the device: ask first
+  if (gpuBusy && !confirm("La GPU está ocupada, quizá por un entrenamiento. Un trabajo a la vez que un entrenamiento " +
+                          "apagó el PC una vez. ¿Lanzarlo de todos modos?")) {
+    $("#msg").textContent = "";
     go.disabled = false;
     return;
   }

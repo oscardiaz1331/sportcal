@@ -1,7 +1,9 @@
 """The web app's job handling (ADR 0006) with a stand-in worker: no GPU, no weights."""
+import contextlib
 import json
 import subprocess
 import sys
+import threading
 import time
 
 import psutil
@@ -47,10 +49,11 @@ write("cancelled")
 '''
 
 
-@pytest.fixture
-def client(tmp_path):
+@contextlib.contextmanager
+def serving(tmp_path, worker_source):
+    """A client of the app over an empty jobs folder, with `worker_source` (Python) as its worker."""
     worker = tmp_path / "fake_worker.py"
-    worker.write_text(FAKE_WORKER)
+    worker.write_text(worker_source, encoding="utf-8")
     jobs = tmp_path / "jobs"
     app = server.make_app(jobs, [sys.executable, str(worker)])
     with TestClient(app, base_url="http://127.0.0.1:8000") as c:  # the only host the app answers to
@@ -59,6 +62,12 @@ def client(tmp_path):
         for f in jobs.iterdir():  # release any stand-in still waiting
             if f.is_dir():
                 (f / "cancel").touch()
+
+
+@pytest.fixture
+def client(tmp_path):
+    with serving(tmp_path, FAKE_WORKER) as c:
+        yield c
 
 
 def post(client, name="clip.mp4", headers=None, **form):
@@ -181,6 +190,50 @@ def test_a_job_whose_worker_is_starting_lists_as_starting_and_cannot_be_deleted(
     assert client.delete(f"/api/jobs/{folder.name}").status_code == 409
     client.app.state.starting = None
     assert client.get("/api/jobs").json()[0]["state"] == "interrupted"
+
+
+def test_a_job_lists_as_starting_while_its_worker_starts(tmp_path):
+    """The real thing, not the state set by hand: a worker slow to start, the list read meanwhile."""
+    with serving(tmp_path, "import time\ntime.sleep(1.5)\n" + FAKE_WORKER) as client:
+        seen = []
+
+        def poll():
+            for _ in range(50):
+                seen.extend(j["state"] for j in client.get("/api/jobs").json())
+                time.sleep(0.1)
+
+        reader = threading.Thread(target=poll)
+        reader.start()
+        assert post(client).status_code == 201
+        reader.join()
+        assert "starting" in seen and "running" in seen and "interrupted" not in seen
+
+
+def test_a_worker_that_dies_at_once_is_an_error_with_its_last_words(tmp_path):
+    with serving(tmp_path, 'print("faltan los pesos: señal")\nraise SystemExit(3)\n') as client:
+        r = post(client)
+        assert r.status_code == 500 and "señal" in r.json()["error"]        # its log, accents intact
+        assert client.get("/api/jobs").json()[0]["state"] == "interrupted"
+        assert post(client).status_code == 500                              # the lock was released: it tries again
+
+
+def test_a_worker_that_never_reports_is_stopped_not_left_running(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "START_TIMEOUT_S", 2)
+    with serving(tmp_path, "import time\ntime.sleep(60)\n") as client:
+        assert post(client).status_code == 500
+        time.sleep(0.5)
+        script = str(tmp_path / "fake_worker.py")
+        left = [p.pid for p in psutil.process_iter(["cmdline"]) if script in (p.info["cmdline"] or [])]
+        assert left == []                                                   # launcher and interpreter both gone
+
+
+def test_leftovers_of_a_delete_are_swept_at_start(tmp_path):
+    jobs = tmp_path / "jobs"
+    (jobs / ".deleting-20260927-120000-old").mkdir(parents=True)
+    (jobs / ".deleting-20260927-120000-old" / "input.mp4").write_bytes(b"x")
+    (jobs / "20260927-130000-kept").mkdir()
+    server.make_app(jobs)
+    assert [f.name for f in jobs.iterdir()] == ["20260927-130000-kept"]
 
 
 def test_the_server_does_not_load_torch():

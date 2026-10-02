@@ -6,8 +6,10 @@ survives the browser tab and the server, and the GPU is free between jobs. All j
 the job it is starting.
 """
 import asyncio
+import contextlib
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -97,8 +99,23 @@ def job(folder, starting=None):
     st["id"] = folder.name
     st["files"] = [f for f in ("out.mp4", "tracks.csv", "worker.log") if (folder / f).exists()]
     if st["state"] in ("failed", "interrupted") and "worker.log" in st["files"]:
+        # ponytail: the whole log is read on every poll of every failed job; fine while a log is a few KB (a line per
+        # 100 frames and a traceback). Upgrade: read only its tail
         st["log_tail"] = (folder / "worker.log").read_text(encoding="utf-8", errors="replace").splitlines()[-20:]
     return st
+
+
+def kill_tree(pid):
+    """Stop the process `pid` and what it started. The venv's python.exe is a launcher and the worker is the
+    interpreter it starts; uv's launcher takes that child down with it (seen here), another one may not."""
+    try:
+        procs = [psutil.Process(pid)]
+        procs += procs[0].children(recursive=True)
+    except psutil.Error:
+        return
+    for p in procs:
+        with contextlib.suppress(psutil.Error):
+            p.kill()
 
 
 def job_folder(request):
@@ -188,12 +205,14 @@ async def create_job(request):
                        "--device", device, f"--name={upload.filename}"]
                 if end_s is not None:
                     cmd.append(f"--end={end_s}")
-                with open(folder / "worker.log", "w", encoding="utf-8") as log:
+                with open(folder / "worker.log", "w", encoding="utf-8") as log:  # PYTHONUTF8: the log in UTF-8 too
                     proc = subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
-                                            stdin=subprocess.DEVNULL, creationflags=DETACHED)
+                                            stdin=subprocess.DEVNULL, creationflags=DETACHED,
+                                            env={**os.environ, "PYTHONUTF8": "1"})
                 deadline = time.monotonic() + START_TIMEOUT_S
                 while not (folder / "status.json").exists():
                     if proc.poll() is not None or time.monotonic() > deadline:
+                        kill_tree(proc.pid)  # too slow to start: stopped, or it would run later, unseen by the lock
                         tail = (folder / "worker.log").read_text(encoding="utf-8", errors="replace")[-2000:]
                         return error(f"el proceso no arrancó:\n{tail}", 500)
                     await asyncio.sleep(0.1)
@@ -221,12 +240,11 @@ def delete_job(request):
     if is_running(read_status(folder)):
         return error("el trabajo está en marcha: cancélalo antes", 409)
     trash = folder.with_name(f".deleting-{folder.name}")
-    shutil.rmtree(trash, ignore_errors=True)  # left over by an earlier delete that failed half-way
     try:
         folder.rename(trash)  # all or nothing: Windows refuses while any file inside is open
     except OSError:
         return error("archivo en uso: cierra lo que tengas abierto de este trabajo y vuelve a intentarlo", 409)
-    shutil.rmtree(trash, ignore_errors=True)
+    shutil.rmtree(trash, ignore_errors=True)  # what this leaves behind, if anything, `make_app` sweeps at the next start
     return JSONResponse({"id": folder.name})
 
 
@@ -234,6 +252,8 @@ def make_app(jobs=JOBS_DIR, worker=WORKER):
     """The app over the run folders in `jobs`, starting jobs with the command `worker` (tests pass a stand-in)."""
     jobs = Path(jobs)
     jobs.mkdir(parents=True, exist_ok=True)
+    for leftover in jobs.glob(".deleting-*"):  # of a delete whose removal failed half-way: hidden from the list
+        shutil.rmtree(leftover, ignore_errors=True)
     app = Starlette(routes=[
         Route("/", page),
         Route("/api/sports", list_sports),

@@ -23,6 +23,9 @@ product = ["starlette", "uvicorn", "python-multipart", "av", "trackers", "scened
 [tool.setuptools.packages.find]
 include = ["sportcal*"]
 
+[tool.setuptools.package-data]
+"sportcal.product" = ["web/*.html"]  # the web app's page: without this only an editable install serves it
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # `slow` = CPU-only but > ~5 s (golden solver run, headless Streamlit drives). Opt in with: pytest -m ""
