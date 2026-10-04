@@ -103,7 +103,7 @@ disco (`status.json`), salida `out.mp4` + `tracks.csv` (posición en metros por 
 6. **Gates**: la regla física de plausibilidad frente a umbrales de confianza que no discriminan.
 7. **Reutilizar la receta en fútbol y tenis** sin tocar `core/`: solo plantilla + índice de H.
 8. **Producto**: app web local con vídeo anotado y trayectorias en metros.
-9. **Siguiente pregunta de investigación**: un deporte con muchas vistas cuesta ~200 etiquetas (baloncesto, medido); falta ver si una red condicionada por la plantilla lo baja (ADR 0005, sin construir)
+9. **Siguiente pregunta de investigación**: un deporte con muchas vistas cuesta ~200 etiquetas (baloncesto, medido); la red condicionada por la plantilla (ADR 0005) no hace nada sin etiquetas, pero con 50 llega adonde el modelo por deporte necesita 200; falta el control que diga si es la plantilla o el backbone compartido (basketball.md 4)
 
 Frases cortas que resumen el aprendizaje: "la métrica de entrenamiento no era la del problema", "la calidad de las etiquetas fue el techo",
 "las mejoras vinieron de datos y de reglas físicas, no de arquitectura", "cada resultado negativo está documentado con su cifra".

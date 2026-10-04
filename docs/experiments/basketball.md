@@ -2,7 +2,9 @@
 
 Why a fourth sport: tennis needs ten labels (tennis.md section 3), but it is one view of one court. The question left
 is what a sport with many kinds of view costs with the model we have, before building the template-conditioned model
-(ADR 0005). Status: DeepSportRadar indexed and checked by eye (section 2); the Roboflow NBA set downloaded, not used yet.
+(ADR 0005). Status: DeepSportRadar indexed and checked by eye (section 2); the conditioned model is built and its
+zero-shot row is 0% coverage, fine-tuned on 50 labels it does what the per-sport model needs 200 for (section 4); the
+control that tells conditioning from the shared backbone is prepared, not run; the Roboflow NBA set downloaded, not used.
 
 ## 1. Which sport has the best public data (survey, 2026-10-02)
 
@@ -101,3 +103,94 @@ Nancy, Nantes, ...). The guard worked and the run is unaffected, but it is the f
 and it happened on the owner's machine under a lone job: the cause is still open.
 
     runs\basketball_curve.cmd        # 10 / 50 / 200 / 550 labels, then test, last and best; ~1 h
+
+## 4. Zero-shot from hockey + soccer + tennis: the template-conditioned model - `lab/common/train_conditioned.py` (2026-10-04)
+
+**Question:** ADR 0005. Does one network that takes the field template as input (`models/conditioned.py`), trained on
+hockey (NHL + IIHF), soccer and tennis, find a basketball court it has no labels of? And what does sharing one network
+cost the training sports?
+**Method:** frame part from A2 (`--backbone runs/kpline/finetune/best_h.pt`), template CNN and query MLP from scratch; 40
+epochs of 500 steps at batch 4, a third of the samples per sport (NHL and IIHF pooled as hockey, each row with its own
+template), base keypoints for every sport, lr 3e-4 cosine, the usual augmentation; 149 s per epoch, ~1 h 50 min. Checkpoint:
+epoch 29, by the mean over hockey, soccer and tennis of the dev p50 (60 dev frames per template; mean 7.7 px); epochs 34
+and 39 did not beat it. Basketball was not read during training. Px at 1920, percentages of all frames.
+
+**Zero-shot, basketball `test`** (84 frames, 3 held-out arenas): **coverage 0%**, with and without the gate. It is not the
+solver refusing: no point reaches the 0.3 peak threshold. The peak value of the elements in view (p50 0.029, p90 0.057,
+p99 0.21) is that of the elements out of view (0.026, 0.052, 0.25): the network does not respond to the court at all.
+
+**Cost of sharing** (gated; coverage / p50 / p90 / < 10 px / < 25 px):
+
+| sport, split | conditioned, shared | per-sport model A |
+|---|---|---|
+| hockey-nhl `test` (72) | 65% / 9.7 / 20.5 / 35% / 62% | NHL + IIHF pretrain: 75% / 10.3 / - / - / 61% (hockey.md 16) |
+| hockey-iihf `dev` (61) | 98% / 7.9 / 15.5 / 72% / 93% | pretrain: 100% / 8.1 / 17.8 / 59% / 97%; A2: 100% / 7.5 / 17.1 / 67% / 97% |
+| soccer-fifa `test` (2135) | 77% / 7.1 / 19.8 / 53% / 72% | E1, derived keypoints: 89% / 6.5 / 17.0 / 64% / 84% (soccer.md 25) |
+| tennis-itf `test` (1014) | 100% / 1.8 / 3.5 / 98% / 100% | 100% / 1.7 (tennis.md 2) |
+
+NHL `test` per video: nhl10 100% / 10.7, nhl4 82% / 8.5, nhl9 (outdoor) 4%; without the gate 69% / 9.9.
+
+**Per element** (peaks >= 0.3 against the rendered targets, as hockey.md 16):
+
+| weights, frames | points: recall | image error p50 | > 25 px | false / frame | line ends: recall |
+|---|---|---|---|---|---|
+| conditioned, NHL `test` | 47% | 7.6 px | 13% | 0.03 | 46% |
+| model A NHL + IIHF pretrain, NHL `test` | 55% | 7.7 px | 15% | 0.1 | 49% |
+| conditioned, IIHF `dev` | 92% | 4.5 px | 4% | 0.02 | 80% |
+| model A NHL + IIHF pretrain, IIHF `dev` | 95% | 4.6 px | 4% | 0.0 | 85% |
+| conditioned, basketball `test` | 0% | - | - | 0.00 | 0% |
+
+**Does it mix up point names?** Hardly: of the 85 NHL `test` points more than 25 px off, 14 sit within 10 px of another
+template point (2% of the ~650 points found); IIHF `dev` 0 of 28. NHL `dev` reads p50 24.1 px during training because its
+labels are off, not the model: 56 of its 61 frames are `nhl_prior` fits (11-16 px off, hockey.md 0b), model A's own
+pretrain scored 23.7 px on it and A2 16.0, and the same points are 12.2 px from the `dev` labels but 7.6 px from the hand
+labels of `test`.
+**Reading:**
+* Zero-shot fails outright. With three sports (four templates) the network learned its training templates, not how to
+  read one: the risk ADR 0005 named. It cannot be told apart here from not recognising the arenas (the per-sport model
+  also fails with 10 labels, section 3): the frame features and the queries are both out of distribution.
+* Sharing is free for tennis and IIHF. NHL loses 10 points of coverage against model A's pretrain at the same precision:
+  it finds fewer points (47% against 55%), having seen each NHL row ~17 times at the chosen checkpoint against 60.
+  Soccer loses 12 points of coverage against E1, not separable from the base keypoints (the circle views need the derived
+  ones, soccer.md 20) and from ~11x fewer soccer samples (20k against 225k).
+* What model A had for NHL and this run does not: the fine-tune on the hand labels (hockey.md 14).
+
+**Few-shot** (`runs\cond_fewshot.cmd`): the zero-shot weights fine-tuned on the same N basketball labels as section 3
+(`--limit N`, seed 0), same lr, 24 epochs of 137 steps (~3300 steps, ~15 min each), scored on `test`, last checkpoint, no
+gate (coverage / p50 / p90 / < 10 px / < 25 px):
+
+| labels | conditioned, from the zero-shot weights | per-sport model A from ImageNet (section 3) |
+|---|---|---|
+| 10 | 96% / 66.5 / 835.7 / 18% / 30% | 7% / 4.3 / 6.0 / 7% / 7% |
+| 50 | **100% / 5.3 / 10.9 / 89% / 94%** | 75% / 12.6 / 606 / 31% / 44% |
+| 200 | 100% / 5.3 / 11.6 / 79% / 99% | 100% / 5.2 / 11.7 / 83% / 95% |
+| 550 | - | 100% / 4.6 / 9.1 / 90% / 98% |
+
+With the gate: N = 10 69% / 39.8 / 112.6 / 18% / 30%, N = 50 96% / 5.1 / 9.4 / 89% / 94%, N = 200 unchanged. Per arena at
+N = 10: Roanne 100% / 4.7, Limoges 100% / 41.2, the three Caen games 92-100% / 107-109; at N = 50 every arena answers all
+its frames at p50 3.8-6.8 (one Caen game: p90 86, 65% < 10 px). Dev during training: N = 10 67-77% coverage at p50 ~4;
+N = 50 and 200 100% at p50 4.3-6.1. No corrupted batch in the three runs.
+* **50 labels are enough.** The conditioned model at 50 labels is where the per-sport model is with 200 to 550 (100%
+  coverage, 89% < 10 px, against 75% and 31% at the same 50): about four times fewer labels for a sport with many views.
+* **200 labels: no difference.** Both are at 100% coverage and p50 5.2-5.3.
+* **10 labels still do not work, and fail worse:** the per-sport model refuses (7% coverage), this one answers 96% of
+  the frames and is right on 30%; the gate removes a quarter of the answers, not the error. It learned the arena of its
+  labels (Roanne) and is wrong on Caen.
+
+**Decision:** the zero-shot row of ADR 0005 is answered: no. The few-shot row is a yes at 50 labels against the per-sport
+model from ImageNet. **Not known yet: whether that gain is the conditioning or the backbone trained on three sports.**
+The control of ADR 0005 separates them: model A with a new named head on the same frame part
+(`runs\kpline-cond\shared\backbone_as_model_a_basketball.pt`, the conditioned weights minus the template CNN and the
+query MLP, plus an untrained 56-channel head), same labels and budget (`runs\cond_control.cmd`, prepared, not run). If
+the control also reaches ~100% / ~5 px at 50 labels, the lesson is "pretrain the backbone on other sports" and the
+conditioning is not worth its code.
+**Caveats:** one run, one seed and one label subset per N; 84 test frames from 3 arenas; template reading and arena
+appearance are confounded in the zero-shot row; soccer is not like for like (base against derived keypoints, fewer
+samples); the per-element numbers come from a one-off script that is not in the repo; IIHF `dev` shares its videos with
+IIHF train; the few-shot runs were selected on nothing (last checkpoint), their dev is 60 of the 94 dev frames.
+
+    python -m sportcal.lab.common.train_conditioned --backbone runs/kpline/finetune/best_h.pt
+    python -m sportcal.lab.common.train_conditioned --eval runs/kpline-cond/shared/best_h.pt --sport basketball-fiba --split test [--gate]
+    python -m sportcal.lab.common.train_conditioned --eval runs/kpline-cond/shared/best_h.pt --sport hockey-nhl --split test --gate
+    runs\cond_fewshot.cmd            # 10 / 50 / 200 basketball labels from the zero-shot weights, then test; ~45 min
+    runs\cond_control.cmd            # the control: a named model-A head on the same frame part, same labels

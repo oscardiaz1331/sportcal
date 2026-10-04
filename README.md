@@ -62,5 +62,7 @@ solver - runs every sport (ADR 0004); each sport has its own weights. On frames 
 | Tennis | 1.7 px on the test split (labels from a court detector); ten labelled frames are enough | tennis.md 2-3 |
 | Basketball (DeepSportRadar) | 4.6 px, 90% under 10 px on three held-out arenas with 550 labels; about 200 labels for full coverage | basketball.md 3 |
 
-Open: outdoor games and wrong homographies a real camera could produce; the template-conditioned model for a sport with
-no labels (ADR 0005, not built); the PC resets under combined load (soccer.md 24).
+Open: outdoor games and wrong homographies a real camera could produce; the template-conditioned model (ADR 0005) does
+nothing on a sport with no labels and needs 50 basketball labels where the per-sport model needs 200 - whether that is
+the conditioning or the shared backbone is not measured yet (basketball.md 4); the PC resets under combined load
+(soccer.md 24).

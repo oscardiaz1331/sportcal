@@ -117,10 +117,15 @@ replacing the raster CNN with a lookup, so B needs no separate design.
 1. [x] Control (a): `train_kpline --sport hockey-iihf --eval runs/kpline/finetune/best_h.pt --split dev --gate`.
 2. [x] Tennis per-sport model (the upper bound): test p50 1.7 px, 100% coverage (`tennis.md` section 2).
 3. [x] `--templates` filter, control (b) on NHL only, scored on IIHF train + dev (hockey.md section 16).
-4. [ ] Template raster + dynamic head in `models/`, one test: the raster sample of an element depends only on the
-       template, and permuting queries permutes the outputs.
-5. [ ] Multi-sport trainer (sampler, padding, selection on training sports), then the five rows of the table, read on
-       basketball (`datasets/basketball_h.jsonl`, 84 test frames) instead of tennis; training sports hockey, soccer and tennis.
+4. [x] Template raster + dynamic head: `models/conditioned.py`, test `tests/test_conditioned.py` (permuting queries
+       permutes the outputs; mutation-checked).
+5. [~] Multi-sport trainer built: `lab/common/train_conditioned.py` (commands for each row in its docstring), trained on
+       hockey NHL + IIHF, soccer and tennis. **Zero-shot on basketball `test`: 0% coverage** - no element fires; sharing
+       is free for tennis and IIHF, costs NHL and soccer ~10 points of coverage (basketball.md 4, 2026-10-04).
+       **Few-shot: 50 labels give 100% coverage, p50 5.3 px, 89% < 10 px** (per-sport model A from ImageNet: 75%, 12.6 px,
+       31%; it needs 200); no difference at 200; 10 labels answer 96% and are right on 30%. Still to run: the few-shot
+       control, a named model-A head on the same frame part (`runs\cond_control.cmd`) - without it the gain cannot be
+       credited to the conditioning rather than to the backbone trained on three sports.
 6. [x] Basketball template, H index and label curve of the per-sport model (basketball.md 2-3).
 7. [ ] Decide whether to build 4-5 (owner). Cheaper first, if wanted: more `fresh` soccer labels, and the Roboflow NBA set
        re-split by game as a second held-out check (basketball.md 2).

@@ -185,9 +185,10 @@ pose, no.
 
 1. Por qué el DLT de segmentación cubre ~0-4% de frames NHL aleatorios (hipótesis sin probar: puntos derivados de intersecciones y tangentes).
 2. Una comprobación que atrape homografías "de cámara real pero equivocada" (acuerdo con la H arrastrada por el movimiento de los vecinos).
-3. Modelo condicionado por la plantilla (ADR 0005): sin construir; el control de pocas etiquetas ya mostró que en tenis no compensa; solo
-   la fila zero-shot sigue siendo informativa. Baloncesto (muchos pabellones, vistas distintas) sí es el régimen útil: 10 etiquetas fallan, 50 dan
-   75% de cobertura y 200 el 100%, así que un modelo condicionado tendría que ganar a 50-200 etiquetas (b 3).
+3. Modelo condicionado por la plantilla (ADR 0005): construido y entrenado con hockey + fútbol + tenis. Zero-shot en baloncesto: 0% de
+   cobertura, no enciende ningún punto. Con 50 etiquetas da 100% de cobertura y 5.3 px, lo que el modelo por deporte da con 200 (con 50 se
+   queda en 75%); con 10 sigue fallando. Falta el control (cabeza de canales fijos sobre el mismo backbone) que diga si la ganancia es la
+   plantilla o el preentrenamiento con otros deportes (b 4).
 4. Seguimiento de jugadores en metros (h 15): ¿los trackers de stock cambian la identidad? Diseño y reglas de decisión escritos, **no ejecutado**.
 5. Fútbol: re-calibrar el centro fijo por zoom; `soccer2` (otra emisión) no lo sostuvo (2 de 60 frames válidos).
 6. Frames con 4+ rectas que el índice sigue descartando (3393 con línea > 3 px).
