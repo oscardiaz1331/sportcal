@@ -1,7 +1,27 @@
 # ADR 0005 - E2: one keypoint + line model that takes the field template as input
 
-Status: proposed, 2026-09-27. Deciders: the owner. Refines experiments E2 and E4 of ADR 0004 (tennis replaces
-basketball as the held-out sport, `tennis.md`).
+Status: proposed, 2026-09-27; the controls are done and the held-out sport changed again on 2026-10-04 (section "State of
+play"). Not accepted: building the conditioned model is the owner's call. Deciders: the owner. Refines experiments E2
+and E4 of ADR 0004.
+
+## State of play (2026-10-04)
+
+What the controls and the cheap baselines measured, and what that does to the plan:
+
+| Question | Answer | Where |
+|---|---|---|
+| Does model A trained on NHL alone read IIHF with the IIHF template? | No: 25-43% coverage against 100% with IIHF in training. The points it finds are in place (7.9 px); it finds 19% of them. A recognition failure, not a geometry one | hockey.md 16 |
+| So is NHL -> IIHF a test of conditioning? | No, dropped | same |
+| Held-out sport = tennis? | Cannot discriminate: a per-sport model from the ImageNet encoder gets p50 2.0 px with 10 labels, 1.7 px with 6612 | tennis.md 3 |
+| A sport with many kinds of view? | Basketball (DeepSportRadar, fixed cameras in 15 arenas): per-sport model A at p50 5.2 px / 83% < 10 px with 200 labels and 100% coverage; 75% coverage with 50; fails with 10; 4.6 px / 90% with all 550 | basketball.md 3 |
+
+**Held-out sport is now basketball (DeepSportRadar), tennis stays as a training sport.** It is the regime the question
+needs: 50 to 200 labels is where the per-sport model starts to work, so a conditioned model that starts from hockey +
+soccer + tennis has something real to beat there, and zero labels is the row nothing else can reach. The five rows of
+section 5 are read on its 84 test frames (3 held-out arenas) with the numbers above as the per-sport rows.
+Reasons not to build it yet, honestly: tennis needs ten labels and the product already carries three sports with the
+per-sport model; the conditioned model would be the largest piece of code left, on a machine that has reset under
+load (soccer.md 24); and DeepSportRadar's licence is non-commercial, so it is a test, not a product model.
 
 ## Context
 
@@ -99,4 +119,8 @@ replacing the raster CNN with a lookup, so B needs no separate design.
 3. [x] `--templates` filter, control (b) on NHL only, scored on IIHF train + dev (hockey.md section 16).
 4. [ ] Template raster + dynamic head in `models/`, one test: the raster sample of an element depends only on the
        template, and permuting queries permutes the outputs.
-5. [ ] Multi-sport trainer (sampler, padding, selection on training sports), then the five rows of the table.
+5. [ ] Multi-sport trainer (sampler, padding, selection on training sports), then the five rows of the table, read on
+       basketball (`datasets/basketball_h.jsonl`, 84 test frames) instead of tennis; training sports hockey, soccer and tennis.
+6. [x] Basketball template, H index and label curve of the per-sport model (basketball.md 2-3).
+7. [ ] Decide whether to build 4-5 (owner). Cheaper first, if wanted: more `fresh` soccer labels, and the Roboflow NBA set
+       re-split by game as a second held-out check (basketball.md 2).

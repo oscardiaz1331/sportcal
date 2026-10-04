@@ -9,7 +9,7 @@ segmentation, keypoint models) and **one product pipeline** that composes the ap
 ```
 sportcal/
   core/      sport-agnostic geometry, pinhole camera, robust fitting, surface segmentation, label I/O
-  sports/    template geometry per sport (hockey NHL/IIHF, soccer FIFA)
+  sports/    template geometry per sport (hockey NHL/IIHF, soccer FIFA, tennis ITF, basketball FIBA)
   lab/       experiments per sport (`python -m sportcal.lab.<sport>.<name>`), lab/common for shared apps, archive/ for dead ends
   product/   deployable pipeline: chain of estimators with fallback
 tests/       fast, deterministic tests (no GPU / data)
@@ -46,13 +46,21 @@ The same from the browser - upload a video, pick the sport, follow the job, watc
 ## Where to read next
 
 * [docs/architecture.md](docs/architecture.md) - layers, dependency rules, how to add a sport / experiment / product method
-* [docs/experiments/hockey.md](docs/experiments/hockey.md), [docs/experiments/soccer.md](docs/experiments/soccer.md) - what was measured, what worked, what was discarded (with numbers)
+* [docs/experiments/](docs/experiments/): [hockey.md](docs/experiments/hockey.md), [soccer.md](docs/experiments/soccer.md), [tennis.md](docs/experiments/tennis.md), [basketball.md](docs/experiments/basketball.md) - what was measured, what worked, what was discarded (with numbers)
 * [docs/decisions/](docs/decisions/) - ADRs, including the current (provisional) product composition
 * [docs/porting-status.md](docs/porting-status.md) - restructure ledger and old -> new path map
 
 ## Status
 
-Best model: keypoint + line heatmaps (model A2, `lab/common/train_kpline.py`) with a camera plausibility gate, 7.2 px
-median at 97% coverage on 4 NHL arenas nothing was tuned on - the first to reach the ~8 px a metric minimap needs. YOLO
-keypoints (102 px median) remain as an optional coverage fallback. Open: outdoor games and wrong homographies a real
-camera could produce. Details: `docs/decisions/0003-product-composition.md`, `docs/experiments/hockey.md` sections 14g-14h.
+The same model - keypoint + line heatmaps (`lab/common/train_kpline.py`) with a camera plausibility gate and one shared
+solver - runs every sport (ADR 0004); each sport has its own weights. On frames nothing was tuned on (target ~8 px):
+
+| Sport | Result | Details |
+|---|---|---|
+| Hockey (NHL) | 7.2 px median at 97% coverage on 4 arenas; YOLO keypoints (102 px) stay as an optional fallback | ADR 0003, hockey.md 14g-14h |
+| Soccer | 7.7 px at 100% coverage on our hand labels, centre-circle views included (PnLCalib 10.3 px); SoccerNet test 6.5 px | soccer.md 19-25 |
+| Tennis | 1.7 px on the test split (labels from a court detector); ten labelled frames are enough | tennis.md 2-3 |
+| Basketball (DeepSportRadar) | 4.6 px, 90% under 10 px on three held-out arenas with 550 labels; about 200 labels for full coverage | basketball.md 3 |
+
+Open: outdoor games and wrong homographies a real camera could produce; the template-conditioned model for a sport with
+no labels (ADR 0005, not built); the PC resets under combined load (soccer.md 24).

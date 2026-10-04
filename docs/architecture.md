@@ -96,6 +96,10 @@ venv/Scripts/python.exe -m sportcal.lab.hockey.seg_to_homography --selftest
   shaped that way, never quote experiment numbers (link the write-up instead).
 * Pixel errors are always reported normalised to a 1920 px frame width (`core.geometry.REF_WIDTH`).
 * World frame: metres, X along the length, Y across the width, origin at a corner (hockey) or the
-  centre (soccer). H maps world -> image.
+  centre (soccer, tennis, basketball). H maps world -> image.
+* The keypoint + line model takes 16:9 frames (`models/kpline.to_input` scales to a 960 px width and would crop a
+  taller one): a dataset with another shape is padded to 16:9 in its H index (basketball, `lab/basketball/deepsport_h`).
+* A new sport's first questions are measured with the same recipe: a template, an H index, a look at the template drawn on
+  the frames, then the label curve (`train_kpline --limit N`; tennis.md 3, basketball.md 3).
 * A deliberate simplification with a known ceiling gets a `ponytail:` comment naming the ceiling
   and the upgrade path.

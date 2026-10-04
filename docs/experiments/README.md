@@ -1,6 +1,6 @@
 # Experiment write-ups
 
-One file per sport (`hockey.md`, `soccer.md`). Every experiment gets
+One file per sport (`hockey.md`, `soccer.md`, `tennis.md`, `basketball.md`). Every experiment gets
 a section in this shape so results stay comparable and dead ends stay dead:
 
 ```markdown

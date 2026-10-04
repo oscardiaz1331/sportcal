@@ -2,7 +2,7 @@
 
 Camera calibration (planar homography) from broadcast sports video, to project player tracking onto a minimap.
 Per-sport **labs** evaluate approaches; one **product** pipeline composes the winners. Sports: hockey (NHL/IIHF),
-soccer, tennis (the "new sport" of the multi-sport plan, ADR 0004). Start with `docs/architecture.md`.
+soccer, tennis and basketball (the "new sports" of the multi-sport plan, ADR 0004, 0005). Start with `docs/architecture.md`.
 
 ## How to work here: the ponytail way (lazy senior developer)
 
@@ -55,8 +55,9 @@ the minimum code that works.
 |---|---|
 | Layers, dependency rules, adding a sport / experiment / product method | `docs/architecture.md` |
 | Why things are the way they are | `docs/decisions/` (ADRs; 0003 product composition, 0004 network output + shared solver, 0005 template-conditioned model, 0006 product web app) |
-| What was measured, and the dead ends | `docs/experiments/hockey.md` (Spanish long-form `hockey.es.md`), `soccer.md`, `tennis.md` |
+| What was measured, and the dead ends | `docs/experiments/hockey.md` (Spanish long-form `hockey.es.md`), `soccer.md`, `tennis.md`, `basketball.md` |
 | Code | `sportcal/{core,sports,models,lab,product}`; tests in `tests/` |
+| Highlights for future projects (Spanish) / project primer for CV + DL work | `docs/lecciones-aprendidas.md`, `docs/guia-del-proyecto.md` |
 | Porting ledger (old -> new paths) | `docs/porting-status.md` |
 
 ## Rules
@@ -88,7 +89,12 @@ the minimum code that works.
     89% coverage, p50 6.5 px; our `fresh` labels 100% coverage, p50 7.7 px, centre-circle views included (PnLCalib:
     10.3 px). Circle views are still the weakest subset of `test` (soccer.md 22-25).
   * Tennis: per-sport model `runs/kpline-tennis-itf/pretrain`, test p50 1.7 px against detector-made labels, no
-    `fresh` labels (`tennis.md`).
+    `fresh` labels; ten labelled frames give the same (`tennis.md` 2-3).
+  * Basketball (DeepSportRadar, non-commercial licence, not in the product): `basketball-fiba` template and
+    `datasets/basketball_h.jsonl` (728 frames padded to 16:9, split by arena); per-sport model on 550 labels 4.6 px,
+    90% < 10 px on 3 held-out arenas; ~200 labels for full coverage, 10 do not work (`basketball.md` 2-3).
+  * ADR 0005 (template-conditioned model for a sport with no labels) is designed, not built; NHL -> IIHF is not a test of
+    it (`hockey.md` 16), the held-out sport would be basketball.
   * The PC has reset under combined CPU + GPU load and once fed corrupted batches (soccer.md 24): one heavy job at a
     time while a training runs.
   * Product (ADR 0006): a local web app over one worker per video, for `hockey-nhl`, `soccer-fifa` and `tennis-itf`
@@ -112,5 +118,7 @@ python -m sportcal.product.server                                               
 python -m sportcal.product.video nhl11.mp4 --sport hockey-nhl --end 20 [--device cpu]  # one video -> runs/product/<run>/
 python -m sportcal.lab.soccer.soccernet_h --root datasets/calibration-2023          # soccer H index
 python -m sportcal.lab.tennis.tennis_h                                             # tennis H index
+python -m sportcal.lab.basketball.deepsport_h                                      # basketball H index (datasets/basket)
+python -m sportcal.lab.common.train_kpline --sport tennis-itf --phase pretrain --limit 50   # N labels only (few-label curve)
 python -m streamlit run sportcal/lab/common/annotate_val_app.py                    # hand-label hockey / soccer frames
 ```
