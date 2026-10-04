@@ -61,3 +61,43 @@ their 17-18 games with train, so it would have to be re-split by game, and the s
 generalization number means something. The template's 33 point positions are not published with it.
 
     python -m sportcal.lab.basketball.deepsport_h        # -> datasets/basketball_h.jsonl (728 rows), datasets/basket_169/
+
+## 3. How many labels does basketball need? - `train_kpline --limit`, DeepSportRadar (2026-10-04)
+
+**Question:** tennis needed ten labels (tennis.md section 3) because it is one view of one court. A sport whose cameras
+differ from arena to arena: what does the same per-sport model A cost?
+**Method:** as tennis: `--limit N` (first N train rows of one shuffle, repeated), the ImageNet encoder, ~3300 steps each
+(24 epochs of 550 rows; 33 epochs of 400 rows for N = 200), base keypoints (56 channels), usual augmentation. Train is 550
+frames from 10 arenas; scored on the 84 test frames of the 3 held-out arenas (Caen 3 games, Limoges, Roanne), px at 1920
+of the padded frame, no gate. The owner ran it from his console (`runs/basketball_curve.cmd`).
+
+| labels | arenas seen | checkpoint | coverage | p50 | p90 | < 10 px | < 25 px |
+|---|---|---|---|---|---|---|---|
+| 10 | ~7 | last | 7% | 4.3 | 6.0 | 7% | 7% |
+| 50 | ~9 | last | 75% | 12.6 | 606 | 31% | 44% |
+| 200 | 10 | last | 100% | 5.2 | 11.7 | 83% | 95% |
+| 550 (all) | 10 | last | 100% | 4.6 | 9.1 | 90% | 98% |
+| 550 (all) | 10 | best on dev | 100% | 4.2 | 8.3 | 93% | 99% |
+
+The best-on-dev checkpoint of the smaller runs is worse than the last (N = 50: 70% coverage, p50 20.5; N = 200: p50 7.5,
+< 25 px 77%; N = 10: 7%): dev is two other arenas, and an early epoch can win it by luck. A new sport has no labelled dev
+anyway, so the last-checkpoint rows are the honest ones. Dev during training: N = 10 loses coverage as it trains
+(61% -> 47%); N = 200 is at p50 2.8-3.8 on dev from epoch 7 on.
+**Per arena** (last checkpoint, 200 -> 550 labels, p50, < 10 px): Caen 4.8-6.8 -> 3.8-4.9 px (75-88% -> 94-100%), Limoges 5.9 -> 6.1
+px (94% -> 62%), Roanne 4.0 -> 4.3 px (100% both; 6 frames). The worst frames of the 550 run are Limoges (33.6, 17.6, 15.6 px)
+and one Caen frame (25.3).
+**Reading:** against tennis' ten, basketball needs on the order of two hundred labelled frames for coverage to
+reach 100% (50 gives three quarters of the frames, and a wild p90), and the whole 550 only improves precision (< 10 px 83%
+-> 90%). Once the model answers, its error is 4-5 px, the same as the sports with thousands of frames: the cost is
+recognition across arenas (floor colour, lighting, camera height), not geometry. Ten labels do not work.
+**For ADR 0005:** this is the regime the held-out-sport test needs and tennis could not give: 50 to 200 labels is where a
+template-conditioned model that starts from hockey + soccer + tennis would have to beat the per-sport row above. Fixed cameras
+and half-court views remain; the licence is non-commercial.
+**Caveats:** 84 test frames, 3 arenas (Roanne has 6 frames, Limoges 16); one run per N and one subset per N (the 50 run's
+p90 of 606 px is one or two frames); the 10 labels come from ~7 arenas and the 50 from ~9, a different mix from
+tennis' one-view-per-video; px are 0.88x what the original frame width would give; not comparable to the challenge's cm MSE.
+**A corrupted batch again:** the N = 200 run skipped one batch at epoch 24 (`train_kpline.corrupted`; rows from Gravelines,
+Nancy, Nantes, ...). The guard worked and the run is unaffected, but it is the first since 2026-09-27 (soccer.md section 24)
+and it happened on the owner's machine under a lone job: the cause is still open.
+
+    runs\basketball_curve.cmd        # 10 / 50 / 200 / 550 labels, then test, last and best; ~1 h
