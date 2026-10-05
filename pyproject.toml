@@ -1,11 +1,15 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]  # 77 = SPDX `license` string (PEP 639)
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "sportcal"
 version = "0.1.0"
 description = "Sport-field camera calibration (homography) from broadcast video: per-sport labs plus a deployable product pipeline."
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "oscardiaz1331" }]
 requires-python = ">=3.10"
 # opencv-CONTRIB on purpose: cv2.ximgproc (findEllipses, EdgeDrawing) needs it, and installing plain
 # opencv-python next to it overwrites cv2.pyd with a build that has no ximgproc.
