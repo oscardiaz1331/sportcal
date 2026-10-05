@@ -14,11 +14,36 @@ scratch_frames/
 
 # salidas de scripts / cachés puntuales de la sesión
 *_hsv_scan.csv
+/hsv_scan.csv
 nhl_annotations_*.csv
 rink_preds_*.json
 tracking_log.csv
 scratch_idx.pkl
 
+# configs de entrenamiento generadas con rutas absolutas (lab/hockey/prepare_data) y la copia temporal de `resume`
+configs/hockey/*.yaml
+training/
+
 # packaging
 *.egg-info/
 .pytest_cache/
+build/
+dist/
+
+# red de seguridad: secretos, editores, otros formatos de pesos y de video, basura del SO
+.env*
+.vscode/
+.idea/
+*.onnx
+*.pth
+*.ckpt
+*.avi
+*.mov
+*.mkv
+.DS_Store
+Thumbs.db
+
+# carpetas locales de herramientas / agentes
+.superpowers/
+.cmem-projects/
+agent-transcripts/

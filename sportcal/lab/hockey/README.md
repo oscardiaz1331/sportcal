@@ -8,7 +8,7 @@ Two independent models (not one multi-head model):
 | Rink keypoints | `yolo26m-pose` | `SimulaMet-HOST/HockeyRink` (661 img, 56 kpts) | pose |
 
 Results and what was learned from all of this: [docs/experiments/hockey.md](../../../docs/experiments/hockey.md).
-Training configs live in `configs/hockey/`.
+`prepare_data` generates the training configs into `configs/hockey/` (not tracked: they hold absolute paths).
 
 ## Flow
 

@@ -3,10 +3,11 @@
 One segment per URL (default: 4 minutes starting at minute 4), at most 1080p. Produces
 nhl4.mp4, nhl5.mp4, ... plus their rink_preds_nhlN.json. Resumable: skips what exists.
 
-    python -m sportcal.lab.hockey.fetch_clips                       # the URLS below
-    python -m sportcal.lab.hockey.fetch_clips --start 4 --dur 4     # another segment
-    python -m sportcal.lab.hockey.fetch_clips --urls <url1> <url2>  # other URLs
-    python -m sportcal.lab.hockey.fetch_clips --first-index 8       # number from nhl8.mp4
+    python -m sportcal.lab.hockey.fetch_clips --urls <url1> <url2>                # one segment per URL
+    python -m sportcal.lab.hockey.fetch_clips --urls <url> --start 4 --dur 4      # another segment
+    python -m sportcal.lab.hockey.fetch_clips --urls <url> --first-index 8        # number from nhl8.mp4
+
+The URLs are yours to choose: only download footage whose source allows it.
 """
 import argparse
 import subprocess
@@ -15,14 +16,6 @@ from pathlib import Path
 
 from sportcal.paths import ROOT
 
-URLS = [
-    "<video-url>",
-    "<video-url>",
-    "<video-url>",
-    "<video-url>",
-]
-
-
 def hhmmss(minutes):
     s = int(round(minutes * 60))
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
@@ -30,7 +23,7 @@ def hhmmss(minutes):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--urls", nargs="*", default=URLS)
+    ap.add_argument("--urls", nargs="+", required=True)
     ap.add_argument("--start", type=float, default=4.0, help="segment start, minutes")
     ap.add_argument("--dur", type=float, default=4.0, help="segment length, minutes")
     ap.add_argument("--first-index", type=int, default=4, help="nhl<N>.mp4 of the first video")

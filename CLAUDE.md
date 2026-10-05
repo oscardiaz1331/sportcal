@@ -27,7 +27,7 @@ the minimum code that works.
 ## Skills, MCPs and agents: use them before hand-rolling
 
 * **Library/API questions** (torch, ultralytics, opencv, scipy, streamlit...): the Context7 MCP (`resolve-library-id`,
-  then `query-docs`) before answering from memory - versions here are recent (torch 2.14, opencv 5).
+  then `query-docs`) before answering from memory - versions here are recent (torch 2.13, opencv 5).
 * **Broad searches** across many files: an `Explore` subagent, so only the conclusion enters the context. For a
   single known file or symbol, `Grep`/`Read` directly.
 * **Before claiming done**: the verification skill if installed (`superpowers:verification-before-completion`) -

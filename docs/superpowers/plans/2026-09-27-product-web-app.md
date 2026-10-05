@@ -18,7 +18,7 @@ YOLO26, `trackers` ByteTrack, PySceneDetect 0.7, psutil 7, plain HTML/JS. All in
 
 ## Global Constraints
 
-- Run every command from the repo root `REPO_ROOT` with `venv/Scripts/python.exe` (Git Bash
+- Run every command from the repo root with `venv/Scripts/python.exe` (Git Bash
   paths below). Never `cd` elsewhere for a command that writes data.
 - **A training is running on the GPU.** Do not edit anything the trainer imports: `sportcal/core/`, `sportcal/sports/`,
   `sportcal/models/`, `sportcal/lab/common/`, `sportcal/paths.py`. This plan touches only `sportcal/product/`, `tests/`,

@@ -199,7 +199,7 @@ from sportcal.core.teams import fit_teams, jersey_histogram, team_of
   overwritten):
 
 ```bash
-D=$(mktemp -d) && cd "$D" && REPO_ROOT/venv/Scripts/python.exe -m sportcal.product.hockey_demo REPO_ROOT/nhl10.mp4 --max-frames 300; cd REPO_ROOT
+R=$PWD; D=$(mktemp -d) && cd "$D" && "$R/venv/Scripts/python.exe" -m sportcal.product.hockey_demo "$R/nhl10.mp4" --max-frames 300; cd "$R"
 ```
 
 Expected: runs to the end and prints `[equipos] calibrados con 300 muestras en el frame N`.

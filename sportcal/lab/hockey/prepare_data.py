@@ -43,7 +43,7 @@ POSE_FLIP_IDX = [54, 55, 48, 49, 50, 51, 52, 53, 46, 47, 42, 43, 44, 45, 40, 41,
 #
 # OJO: 0.02 es para AFINAR desde un checkpoint que ya ronda los 90 px. Entrenando desde cero
 # (COCO) la loss se satura a 1.0 y el gradiente se anula, que era el motivo original de 0.10.
-# Ver el comentario largo de hockeyrink_pose.yaml y sportcal/lab/hockey/rink_metric.py.
+# Ver docs/experiments/hockey.md (kpt_oks_sigmas) y sportcal/lab/hockey/rink_metric.py.
 POSE_OKS_SIGMA = 0.02
 
 # frames propios etiquetados sobre pistas NHL (relativo a `path`); se entrena y se valida con
@@ -163,6 +163,7 @@ if __name__ == "__main__":
     ap.add_argument("--only", choices=["det", "pose"], help="solo uno de los dos")
     args = ap.parse_args()
 
+    TRAINING.mkdir(parents=True, exist_ok=True)  # configs/hockey/ is not tracked: a fresh clone has no such folder
     if args.only != "pose":
         prepare_detection(args.force)
     if args.only != "det":
