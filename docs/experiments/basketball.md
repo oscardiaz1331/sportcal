@@ -4,7 +4,8 @@ Why a fourth sport: tennis needs ten labels (tennis.md section 3), but it is one
 is what a sport with many kinds of view costs with the model we have, before building the template-conditioned model
 (ADR 0005). Status: DeepSportRadar indexed and checked by eye (section 2); the conditioned model is built and its
 zero-shot row is 0% coverage, fine-tuned on 50 labels it does what the per-sport model needs 200 for (section 4); the
-control that tells conditioning from the shared backbone is prepared, not run; the Roboflow NBA set downloaded, not used.
+control with a named head on the same backbone is at 18.5 px with 50 labels, so the gain is the conditioning; the Roboflow
+NBA set downloaded, not used.
 
 ## 1. Which sport has the best public data (survey, 2026-10-02)
 
@@ -159,12 +160,16 @@ labels of `test`.
 (`--limit N`, seed 0), same lr, 24 epochs of 137 steps (~3300 steps, ~15 min each), scored on `test`, last checkpoint, no
 gate (coverage / p50 / p90 / < 10 px / < 25 px):
 
-| labels | conditioned, from the zero-shot weights | per-sport model A from ImageNet (section 3) |
-|---|---|---|
-| 10 | 96% / 66.5 / 835.7 / 18% / 30% | 7% / 4.3 / 6.0 / 7% / 7% |
-| 50 | **100% / 5.3 / 10.9 / 89% / 94%** | 75% / 12.6 / 606 / 31% / 44% |
-| 200 | 100% / 5.3 / 11.6 / 79% / 99% | 100% / 5.2 / 11.7 / 83% / 95% |
-| 550 | - | 100% / 4.6 / 9.1 / 90% / 98% |
+| labels | conditioned, from the zero-shot weights | control: named model-A head on the same frame part | per-sport model A from ImageNet (section 3) |
+|---|---|---|---|
+| 10 | 96% / 66.5 / 835.7 / 18% / 30% | 39% / 333.7 / 861.5 / 7% / 12% | 7% / 4.3 / 6.0 / 7% / 7% |
+| 50 | **100% / 5.3 / 10.9 / 89% / 94%** | 92% / 18.5 / 105.9 / 33% / 54% | 75% / 12.6 / 606 / 31% / 44% |
+| 200 | 100% / 5.3 / 11.6 / 79% / 99% | 100% / 7.4 / 19.7 / 67% / 94% | 100% / 5.2 / 11.7 / 83% / 95% |
+| 550 | - | - | 100% / 4.6 / 9.1 / 90% / 98% |
+
+The control (`runs\cond_control.cmd`) is model A trained with `train_kpline --init` from the conditioned weights minus the
+template CNN and the query MLP, plus an untrained 56-channel head (`runs\kpline-cond\shared\backbone_as_model_a_basketball.pt`):
+the same frame part, labels, steps and lr, with named channels instead of template queries.
 
 With the gate: N = 10 69% / 39.8 / 112.6 / 18% / 30%, N = 50 96% / 5.1 / 9.4 / 89% / 94%, N = 200 unchanged. Per arena at
 N = 10: Roanne 100% / 4.7, Limoges 100% / 41.2, the three Caen games 92-100% / 107-109; at N = 50 every arena answers all
@@ -174,20 +179,35 @@ N = 50 and 200 100% at p50 4.3-6.1. No corrupted batch in the three runs.
   coverage, 89% < 10 px, against 75% and 31% at the same 50): about four times fewer labels for a sport with many views.
 * **200 labels: no difference.** Both are at 100% coverage and p50 5.2-5.3.
 * **10 labels still do not work, and fail worse:** the per-sport model refuses (7% coverage), this one answers 96% of
-  the frames and is right on 30%; the gate removes a quarter of the answers, not the error. It learned the arena of its
-  labels (Roanne) and is wrong on Caen.
+  the frames and is right on 30%; the gate removes a quarter of the answers, not the error. Only the 6 Roanne frames
+  come out right (4.7 px); the Caen games (~108 px) and Limoges (41 px) do not.
+  (Correction of the first write-up of this section: it said the model "learned the arena of its labels (Roanne)";
+  Roanne is a held-out arena, none of the 10 labels comes from it.)
 
-**Decision:** the zero-shot row of ADR 0005 is answered: no. The few-shot row is a yes at 50 labels against the per-sport
-model from ImageNet. **Not known yet: whether that gain is the conditioning or the backbone trained on three sports.**
-The control of ADR 0005 separates them: model A with a new named head on the same frame part
-(`runs\kpline-cond\shared\backbone_as_model_a_basketball.pt`, the conditioned weights minus the template CNN and the
-query MLP, plus an untrained 56-channel head), same labels and budget (`runs\cond_control.cmd`, prepared, not run). If
-the control also reaches ~100% / ~5 px at 50 labels, the lesson is "pretrain the backbone on other sports" and the
-conditioning is not worth its code.
-**Caveats:** one run, one seed and one label subset per N; 84 test frames from 3 arenas; template reading and arena
-appearance are confounded in the zero-shot row; soccer is not like for like (base against derived keypoints, fewer
-samples); the per-element numbers come from a one-off script that is not in the repo; IIHF `dev` shares its videos with
-IIHF train; the few-shot runs were selected on nothing (last checkpoint), their dev is 60 of the 94 dev frames.
+**The control separates conditioning from backbone** (gated, N = 10 / 50 / 200: 19% / 20.6, 81% / 12.9, 99% / 7.3 coverage / p50):
+* **50 labels: the gain is the conditioning, not the shared backbone.** The same frame part with a named head reaches
+  92% coverage but only 18.5 px and 33% < 10 px, the numbers of the per-sport model from ImageNet (31% < 10 px); the
+  conditioned head reaches 5.3 px and 89% < 10 px. What the pretrained backbone buys is answering (75% -> 92% coverage
+  at 50 labels); where the points land comes from the template-conditioned head.
+* **200 labels:** the control gets close (7.4 px, 67% < 10 px against 5.3 px and 79%) and the per-sport model from
+  ImageNet is as good (5.2 px, 83%): the advantage is small and gone against the plain per-sport model.
+* **10 labels:** nothing works; the control is worse than the conditioned model (39% coverage, 334 px).
+* The best-on-dev checkpoint was not scored; dev during the control training: N = 10 49-57% coverage, N = 50 64-93%,
+  N = 200 99-100% at p50 5-6 px.
+
+**Decision (ADR 0005, section 5 rows):** zero-shot: no (0% coverage). Few-shot: yes, at 50 labels - about four times fewer
+than the per-sport model needs, and not explained by the backbone; at 200 labels it is not worth more than the per-sport
+model. So a new sport with many camera views can start from this network with ~50 labels instead of ~200, a saving of
+~150 labels per sport and nothing at all for a one-view sport (tennis, tennis.md 3). Not enough for the product to
+switch: the per-sport route already works with the labels the product sports have, and the held-out sport is
+non-commercial licence. Open: more training sports (padel, volleyball) could make zero-shot work; 10 labels is still the
+wall.
+**Caveats:** one run, one seed and one label subset per N (the 50-label gap, 5.3 against 18.5 px, is large; the 200-label
+gap, 5.3 against 7.4 px, is not separable from seed noise); 84 test frames from 3 arenas (Roanne 6, Limoges 16); template
+reading and arena appearance are confounded in the zero-shot row; soccer is not like for like (base against derived
+keypoints, fewer samples); the per-element numbers come from a one-off script that is not in the repo; IIHF `dev` shares
+its videos with IIHF train; every few-shot and control run is scored on its last checkpoint, with dev on 60 (conditioned)
+or all 94 (control) of the dev frames.
 
     python -m sportcal.lab.common.train_conditioned --backbone runs/kpline/finetune/best_h.pt
     python -m sportcal.lab.common.train_conditioned --eval runs/kpline-cond/shared/best_h.pt --sport basketball-fiba --split test [--gate]

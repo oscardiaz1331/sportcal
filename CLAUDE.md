@@ -95,9 +95,9 @@ the minimum code that works.
     90% < 10 px on 3 held-out arenas; ~200 labels for full coverage, 10 do not work (`basketball.md` 2-3).
   * ADR 0005 (template-conditioned model, `models/conditioned.py`, `lab/common/train_conditioned.py`): built and trained
     on hockey + soccer + tennis; zero-shot on the held-out basketball is 0% coverage; fine-tuned on 50 basketball labels
-    it gives 100% coverage, p50 5.3 px (per-sport model: 75%, 12.6 px; it needs 200). The control that tells the
-    conditioning from the shared backbone (`runs\cond_control.cmd`) is not run (`basketball.md` 4). NHL -> IIHF is not a
-    test of it (`hockey.md` 16). NHL `dev` labels are ~11-16 px off: read NHL on `test`, not `dev`.
+    it gives 100% coverage, p50 5.3 px (per-sport model: 75%, 12.6 px; it needs 200); a named head on the same backbone
+    gives 18.5 px, so the saving is the conditioning; not worth more at 200 labels, not in the product
+    (`basketball.md` 4). NHL -> IIHF is not a test of it (`hockey.md` 16). NHL `dev` labels are ~11-16 px off: read NHL on `test`, not `dev`.
   * The PC has reset under combined CPU + GPU load and once fed corrupted batches (soccer.md 24): one heavy job at a
     time while a training runs.
   * Product (ADR 0006): a local web app over one worker per video, for `hockey-nhl`, `soccer-fifa` and `tennis-itf`

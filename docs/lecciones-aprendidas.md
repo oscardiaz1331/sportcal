@@ -187,8 +187,8 @@ pose, no.
 2. Una comprobación que atrape homografías "de cámara real pero equivocada" (acuerdo con la H arrastrada por el movimiento de los vecinos).
 3. Modelo condicionado por la plantilla (ADR 0005): construido y entrenado con hockey + fútbol + tenis. Zero-shot en baloncesto: 0% de
    cobertura, no enciende ningún punto. Con 50 etiquetas da 100% de cobertura y 5.3 px, lo que el modelo por deporte da con 200 (con 50 se
-   queda en 75%); con 10 sigue fallando. Falta el control (cabeza de canales fijos sobre el mismo backbone) que diga si la ganancia es la
-   plantilla o el preentrenamiento con otros deportes (b 4).
+   queda en 75%); con 10 sigue fallando. El control (cabeza de canales fijos sobre el mismo backbone) da 18.5 px con 50 etiquetas: la
+   ganancia es la plantilla, no el preentrenamiento con otros deportes; con 200 ya no compensa (b 4).
 4. Seguimiento de jugadores en metros (h 15): ¿los trackers de stock cambian la identidad? Diseño y reglas de decisión escritos, **no ejecutado**.
 5. Fútbol: re-calibrar el centro fijo por zoom; `soccer2` (otra emisión) no lo sostuvo (2 de 60 frames válidos).
 6. Frames con 4+ rectas que el índice sigue descartando (3393 con línea > 3 px).

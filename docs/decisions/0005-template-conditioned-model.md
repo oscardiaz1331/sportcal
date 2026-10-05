@@ -1,8 +1,8 @@
 # ADR 0005 - E2: one keypoint + line model that takes the field template as input
 
-Status: proposed, 2026-09-27; the controls are done and the held-out sport changed again on 2026-10-04 (section "State of
-play"). Not accepted: building the conditioned model is the owner's call. Deciders: the owner. Refines experiments E2
-and E4 of ADR 0004.
+Status: built and measured, 2026-10-05 (action item 5, basketball.md 4); proposed 2026-09-27, held-out sport changed on
+2026-10-04 (section "State of play"). Verdict: zero-shot no, few-shot yes at 50 labels (4x fewer than the per-sport
+model), not worth more at 200; not in the product. Deciders: the owner. Refines experiments E2 and E4 of ADR 0004.
 
 ## State of play (2026-10-04)
 
@@ -119,13 +119,14 @@ replacing the raster CNN with a lookup, so B needs no separate design.
 3. [x] `--templates` filter, control (b) on NHL only, scored on IIHF train + dev (hockey.md section 16).
 4. [x] Template raster + dynamic head: `models/conditioned.py`, test `tests/test_conditioned.py` (permuting queries
        permutes the outputs; mutation-checked).
-5. [~] Multi-sport trainer built: `lab/common/train_conditioned.py` (commands for each row in its docstring), trained on
-       hockey NHL + IIHF, soccer and tennis. **Zero-shot on basketball `test`: 0% coverage** - no element fires; sharing
-       is free for tennis and IIHF, costs NHL and soccer ~10 points of coverage (basketball.md 4, 2026-10-04).
+5. [x] Multi-sport trainer: `lab/common/train_conditioned.py` (commands for each row in its docstring), trained on
+       hockey NHL + IIHF, soccer and tennis (basketball.md 4, 2026-10-04/05). **Zero-shot on basketball `test`: 0%
+       coverage** - no element fires. Sharing is free for tennis and IIHF, costs NHL and soccer ~10 points of coverage.
        **Few-shot: 50 labels give 100% coverage, p50 5.3 px, 89% < 10 px** (per-sport model A from ImageNet: 75%, 12.6 px,
-       31%; it needs 200); no difference at 200; 10 labels answer 96% and are right on 30%. Still to run: the few-shot
-       control, a named model-A head on the same frame part (`runs\cond_control.cmd`) - without it the gain cannot be
-       credited to the conditioning rather than to the backbone trained on three sports.
+       31%; it needs 200); no difference at 200; 10 labels do not work. **Control** (a named model-A head on the same
+       frame part, `runs\cond_control.cmd`): 92% coverage, 18.5 px, 33% < 10 px at 50 labels, 7.4 px at 200 - so the
+       saving at 50 labels is the conditioning, not the backbone trained on three sports. One seed and one label subset
+       per N; 84 test frames.
 6. [x] Basketball template, H index and label curve of the per-sport model (basketball.md 2-3).
 7. [ ] Decide whether to build 4-5 (owner). Cheaper first, if wanted: more `fresh` soccer labels, and the Roboflow NBA set
        re-split by game as a second held-out check (basketball.md 2).
