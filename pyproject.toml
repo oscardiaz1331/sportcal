@@ -24,6 +24,10 @@ dev = ["pytest"]
 # the product: local web app + video worker (ADR 0006); the models come from `train`
 product = ["starlette", "uvicorn", "python-multipart", "av", "trackers", "scenedetect", "psutil", "huggingface_hub"]
 
+[project.urls]
+Homepage = "https://github.com/oscardiaz1331/sportcal"
+Issues = "https://github.com/oscardiaz1331/sportcal/issues"
+
 [tool.setuptools.packages.find]
 include = ["sportcal*"]
 
